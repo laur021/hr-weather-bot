@@ -63,9 +63,9 @@ export function loadConfig(): AppConfig {
     weatherSource: (strEnv("WEATHER_SOURCE", "mock") as AppConfig["weatherSource"]) || "mock",
     weatherHttpUrl: strEnv("WEATHER_HTTP_URL"),
     weatherPollIntervalMs: intEnv("WEATHER_POLL_INTERVAL_MS", 600_000),
-    openMeteoLatitude: floatEnv("OPEN_METEO_LATITUDE", 14.5995),
-    openMeteoLongitude: floatEnv("OPEN_METEO_LONGITUDE", 120.9842),
-    openMeteoLocationName: strEnv("OPEN_METEO_LOCATION_NAME", "Metro Manila"),
+    openMeteoLatitude: floatEnv("OPEN_METEO_LATITUDE", 14.6096),
+    openMeteoLongitude: floatEnv("OPEN_METEO_LONGITUDE", 121.08),
+    openMeteoLocationName: strEnv("OPEN_METEO_LOCATION_NAME", "Eastwood City, Quezon City"),
     dataDir: strEnv("DATA_DIR", "./data"),
     logLevel: strEnv("LOG_LEVEL", "info"),
   };

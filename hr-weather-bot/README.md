@@ -50,6 +50,9 @@ npm run dev                # or: npm run build && node dist/index.js
 Builds the image, replaces any running container, and runs it detached with a
 persistent `hr-weather-data` volume for `./data`.
 
+**Deploying to another site (office, etc.)?** See [DEPLOY.md](DEPLOY.md) — it
+needs its own bot token, group IDs, and location.
+
 ## Configuration (`.env`)
 
 | Var | Default | Notes |
