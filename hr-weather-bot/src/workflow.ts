@@ -1,0 +1,430 @@
+import type { AiProvider } from "./ai/prompts.js";
+import { assertHrChat } from "./auth.js";
+import { CB } from "./constants.js";
+import { encodeCallback } from "./telegram/callback.js";
+import { formatManila, makeEventId, nowIso } from "./time.js";
+import type { EventStore } from "./store/store.js";
+import { assertTransition } from "./state/stateMachine.js";
+import type {
+  Keyboard,
+  Messenger,
+  TelegramUser,
+  WeatherEvent,
+  WeatherThreat,
+} from "./types.js";
+
+export class WorkflowError extends Error {
+  constructor(
+    public readonly code:
+      | "NOT_FOUND"
+      | "INVALID_STATE"
+      | "STALE_APPROVAL"
+      | "ALREADY_SENT"
+      | "NO_ACTIVE_DRAFT",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorkflowError";
+  }
+}
+
+const SEVERITY_ICON: Record<string, string> = {
+  watch: "🟡",
+  warning: "🟠",
+  emergency: "🔴",
+};
+
+export class WeatherWorkflow {
+  /** Serializes mutations per event to prevent lost updates on concurrent edits. */
+  private locks = new Map<string, Promise<unknown>>();
+
+  constructor(
+    private readonly store: EventStore,
+    private readonly ai: AiProvider,
+    private readonly messenger: Messenger,
+    private readonly hrChatId: number,
+    private readonly employeeChatId: number,
+  ) {}
+
+  // ---------------------------------------------------------------------
+  // Weather detection (automatic)
+  // ---------------------------------------------------------------------
+  async onWeatherDetected(threat: WeatherThreat): Promise<void> {
+    const existing = await this.findEventFor(threat);
+    if (existing) {
+      const updated: WeatherEvent = {
+        ...existing,
+        weather: { ...threat, detectedAt: existing.weather.detectedAt },
+        updatedAt: nowIso(),
+      };
+      await this.store.upsert(updated);
+      await this.notifyHrAlert(updated);
+      return;
+    }
+
+    const id = makeEventId(nowIso(), await this.nextSeq());
+    const event: WeatherEvent = {
+      id,
+      status: "DETECTED",
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      weather: threat,
+      draftHistory: [],
+    };
+    await this.store.upsert(event);
+    await this.notifyHrAlert(event);
+  }
+
+  // ---------------------------------------------------------------------
+  // HR actions
+  // ---------------------------------------------------------------------
+  async compose(chatId: number | null | undefined, eventId: string, user: TelegramUser): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+      assertTransition(event.status, "WAITING_FOR_APPROVAL");
+
+      const text = await this.ai.composeDraft(event.weather);
+      const draft = {
+        version: 1,
+        text,
+        editedByTelegramUserId: user.id,
+        editedByTelegramUsername: user.username,
+        editedByDisplayName: user.displayName,
+        editedAt: nowIso(),
+      };
+
+      const updated: WeatherEvent = {
+        ...event,
+        status: "WAITING_FOR_APPROVAL",
+        updatedAt: nowIso(),
+        draft,
+        draftHistory: [draft],
+        createdByTelegramUserId: user.id,
+        createdByTelegramUsername: user.username,
+        createdByDisplayName: user.displayName,
+      };
+      await this.store.upsert(updated);
+      await this.sendDraftPreview(updated);
+    });
+  }
+
+  async edit(
+    chatId: number | null | undefined,
+    eventId: string,
+    instruction: string,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+      if (event.status !== "WAITING_FOR_APPROVAL" || !event.draft) {
+        throw new WorkflowError("INVALID_STATE", "There is no draft awaiting edits for this event.");
+      }
+
+      const revised = await this.ai.reviseDraft(event.draft.text, instruction);
+      const draft = {
+        version: event.draft.version + 1,
+        text: revised,
+        editedByTelegramUserId: user.id,
+        editedByTelegramUsername: user.username,
+        editedByDisplayName: user.displayName,
+        editedAt: nowIso(),
+      };
+
+      const updated: WeatherEvent = {
+        ...event,
+        updatedAt: nowIso(),
+        draft,
+        draftHistory: [...event.draftHistory, draft],
+      };
+      await this.store.upsert(updated);
+      await this.sendDraftPreview(updated);
+    });
+  }
+
+  async send(
+    chatId: number | null | undefined,
+    eventId: string,
+    approvedVersion: number | undefined,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+
+      // Double-send / lifecycle protection (application-enforced).
+      if (event.status === "SENDING" || event.status === "SENT") {
+        throw new WorkflowError(
+          "ALREADY_SENT",
+          "This announcement has already been sent or is currently being sent.",
+        );
+      }
+      if (event.status !== "WAITING_FOR_APPROVAL" || !event.draft) {
+        throw new WorkflowError("INVALID_STATE", "This event is not awaiting approval.");
+      }
+
+      // Concurrent-edit protection: version must match the latest draft.
+      if (approvedVersion !== undefined && approvedVersion !== event.draft.version) {
+        throw new WorkflowError(
+          "STALE_APPROVAL",
+          "This announcement has been updated since this approval message was created. Please review the latest version before sending.",
+        );
+      }
+
+      const approved: WeatherEvent = {
+        ...event,
+        status: "APPROVED",
+        updatedAt: nowIso(),
+        approvedByTelegramUserId: user.id,
+        approvedByTelegramUsername: user.username,
+        approvedByDisplayName: user.displayName,
+        approvedAt: nowIso(),
+        approvedDraftVersion: event.draft.version,
+      };
+      await this.store.upsert(approved);
+
+      await this.doEmployeeSend(approved);
+    });
+  }
+
+  async discard(
+    chatId: number | null | undefined,
+    eventId: string,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+      assertTransition(event.status, "DISCARDED");
+
+      const updated: WeatherEvent = {
+        ...event,
+        status: "DISCARDED",
+        updatedAt: nowIso(),
+      };
+      await this.store.upsert(updated);
+      await this.messenger.sendToHr(
+        `❌ Discarded\n\nEvent ${event.id} was discarded. No announcement was sent to employees.`,
+      );
+    });
+  }
+
+  async retrySend(
+    chatId: number | null | undefined,
+    eventId: string,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+      if (event.status !== "SEND_FAILED" || !event.draft) {
+        throw new WorkflowError("INVALID_STATE", "Only a failed send can be retried.");
+      }
+      await this.doEmployeeSend({ ...event, status: "APPROVED" });
+    });
+  }
+
+  async latestStatus(): Promise<string> {
+    const event = await this.store.latestActive();
+    if (!event) {
+      return "🌤️ No active weather advisories.";
+    }
+    const icon = SEVERITY_ICON[event.weather.severity] ?? "ℹ️";
+    const statusLine =
+      event.status === "WAITING_FOR_APPROVAL" && event.draft
+        ? `Draft v${event.draft.version} awaiting approval`
+        : event.status.replace(/_/g, " ");
+    return [
+      `${icon} Latest weather advisory`,
+      ``,
+      `${event.weather.title} (${event.weather.severity.toUpperCase()})`,
+      event.weather.description,
+      ``,
+      `Event: ${event.id}`,
+      `Status: ${statusLine}`,
+      `Detected: ${formatManila(event.weather.detectedAt)}`,
+    ].join("\n");
+  }
+
+  /** Edit the latest active draft (for free-text HR instructions). */
+  async editLatest(
+    chatId: number | null | undefined,
+    instruction: string,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    const active = await this.store.latestActive();
+    if (!active) {
+      throw new WorkflowError("NO_ACTIVE_DRAFT", "There is no active weather event to edit.");
+    }
+    if (active.status !== "WAITING_FOR_APPROVAL" || !active.draft) {
+      throw new WorkflowError(
+        "NO_ACTIVE_DRAFT",
+        "There is no draft awaiting edits. Compose a draft first.",
+      );
+    }
+    await this.edit(chatId, active.id, instruction, user);
+  }
+
+  /** Discard the latest active event (for free-text "Discard."). */
+  async discardLatest(
+    chatId: number | null | undefined,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    const active = await this.store.latestActive();
+    if (!active) {
+      throw new WorkflowError("NO_ACTIVE_DRAFT", "There is no active weather event to discard.");
+    }
+    await this.discard(chatId, active.id, user);
+  }
+
+  /** Re-send the latest draft preview (used after a stale approval). */
+  async showPreview(
+    chatId: number | null | undefined,
+    eventId: string,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    const event = await this.mustGet(eventId);
+    if (!event.draft) {
+      throw new WorkflowError("NO_ACTIVE_DRAFT", "No draft available for this event.");
+    }
+    await this.sendDraftPreview(event);
+  }
+
+  // ---------------------------------------------------------------------
+  // Internals
+  // ---------------------------------------------------------------------
+  private async doEmployeeSend(event: WeatherEvent): Promise<void> {
+    const draft = event.draft;
+    if (!draft) throw new WorkflowError("INVALID_STATE", "No draft to send.");
+
+    await this.store.upsert({ ...event, status: "SENDING", updatedAt: nowIso() });
+
+    const result = await this.messenger.sendToEmployees(draft.text);
+
+    if (result.ok) {
+      const sent: WeatherEvent = {
+        ...event,
+        status: "SENT",
+        updatedAt: nowIso(),
+        sentAt: nowIso(),
+        sentMessageId: result.messageId,
+        sendError: undefined,
+      };
+      await this.store.upsert(sent);
+      await this.messenger.sendToHr(
+        [
+          `✅ Announcement Sent`,
+          ``,
+          `The approved weather advisory was successfully sent to the employee group.`,
+          ``,
+          `Event: ${event.id} (draft v${draft.version})`,
+          `Sent by: ${event.approvedByDisplayName ?? event.approvedByTelegramUsername ?? "HR"}`,
+          `Time: ${formatManila(nowIso())}`,
+        ].join("\n"),
+      );
+    } else {
+      const failed: WeatherEvent = {
+        ...event,
+        status: "SEND_FAILED",
+        updatedAt: nowIso(),
+        sendError: result.error,
+      };
+      await this.store.upsert(failed);
+      await this.messenger.sendToHr(
+        [
+          `⚠️ Announcement send failed`,
+          ``,
+          `Event: ${event.id} (draft v${draft.version})`,
+          `Error: ${result.error ?? "unknown"}`,
+          ``,
+          `Use 🔁 Retry Send to try again.`,
+        ].join("\n"),
+        [[{ text: "🔁 Retry Send", data: encodeCallback(CB.send, event.id, draft.version) }]],
+      );
+    }
+  }
+
+  private async notifyHrAlert(event: WeatherEvent): Promise<void> {
+    const icon = SEVERITY_ICON[event.weather.severity] ?? "ℹ️";
+    await this.messenger.sendToHr(
+      [
+        `🚨 Weather Alert — ${event.weather.severity.toUpperCase()}`,
+        ``,
+        `${icon} ${event.weather.title}`,
+        event.weather.description,
+        ``,
+        `Event: ${event.id}`,
+        `Detected: ${formatManila(event.weather.detectedAt)}`,
+      ].join("\n"),
+      this.alertKeyboard(event.id),
+    );
+  }
+
+  private async sendDraftPreview(event: WeatherEvent): Promise<void> {
+    const draft = event.draft;
+    if (!draft) return;
+    await this.messenger.sendToHr(
+      [
+        `📝 Draft — Version ${draft.version}`,
+        ``,
+        draft.text,
+        ``,
+        `Event: ${event.id}`,
+        `Status: WAITING FOR APPROVAL`,
+      ].join("\n"),
+      this.draftKeyboard(event.id, draft.version),
+    );
+  }
+
+  private alertKeyboard(eventId: string): Keyboard {
+    return [
+      [
+        { text: "📝 Compose Draft", data: encodeCallback(CB.compose, eventId) },
+        { text: "❌ Discard", data: encodeCallback(CB.discard, eventId) },
+      ],
+    ];
+  }
+
+  private draftKeyboard(eventId: string, version: number): Keyboard {
+    return [
+      [
+        { text: "✅ Send to Employees", data: encodeCallback(CB.send, eventId, version) },
+        { text: "✏️ Edit", data: encodeCallback(CB.edit, eventId) },
+        { text: "❌ Discard", data: encodeCallback(CB.discard, eventId) },
+      ],
+    ];
+  }
+
+  private async mustGet(eventId: string): Promise<WeatherEvent> {
+    const event = await this.store.get(eventId);
+    if (!event) throw new WorkflowError("NOT_FOUND", `Event ${eventId} not found.`);
+    return event;
+  }
+
+  private async findEventFor(threat: WeatherThreat): Promise<WeatherEvent | undefined> {
+    const active = await this.store.listActive();
+    return active.find(
+      (e) => e.weather.title === threat.title && e.weather.severity === threat.severity,
+    );
+  }
+
+  private async nextSeq(): Promise<number> {
+    const events = await this.store.list();
+    const today = new Date().toISOString().slice(0, 10);
+    const todayCount = events.filter((e) => e.id.includes(today.replace(/-/g, ""))).length;
+    return todayCount + 1;
+  }
+
+  private withLock<T>(eventId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.locks.get(eventId) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    this.locks.set(
+      eventId,
+      run.catch(() => undefined),
+    );
+    return run;
+  }
+}
