@@ -35,9 +35,20 @@ action (validated by backend code) can broadcast there.
 
 ```bash
 npm install
-cp .env.example .env       # then fill in TELEGRAM_BOT_TOKEN (and DEEPSEEK_API_KEY)
+cp .env.example .env       # fill in TELEGRAM_BOT_TOKEN + DEEPSEEK_API_KEY
 npm run dev                # or: npm run build && node dist/index.js
 ```
+
+## Docker deploy (one line)
+
+```bash
+./deploy.sh                # bash
+# or, on Windows PowerShell:
+./deploy.ps1
+```
+
+Builds the image, replaces any running container, and runs it detached with a
+persistent `hr-weather-data` volume for `./data`.
 
 ## Configuration (`.env`)
 
@@ -50,9 +61,12 @@ npm run dev                # or: npm run build && node dist/index.js
 | `DEEPSEEK_API_KEY` | — | required when `AI_PROVIDER=deepseek` |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | any OpenAI-compatible model |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/chat/completions` | override for any compatible endpoint |
-| `WEATHER_SOURCE` | `mock` | `mock`, `http`, or `noop` |
+| `WEATHER_SOURCE` | `open-meteo` | `open-meteo` (free, no key), `mock`, `http`, or `noop` |
+| `OPEN_METEO_LATITUDE` | `14.5995` | latitude (defaults to Manila) |
+| `OPEN_METEO_LONGITUDE` | `120.9842` | longitude |
+| `OPEN_METEO_LOCATION_NAME` | `Metro Manila` | label used in alerts |
 | `WEATHER_HTTP_URL` | — | for `http`: returns `{severity,title,description}` |
-| `WEATHER_HTTP_INTERVAL_MS` | `600000` | polling interval for `http` |
+| `WEATHER_POLL_INTERVAL_MS` | `600000` | poll interval for `http` / `open-meteo` |
 | `DATA_DIR` | `./data` | JSON persistence location |
 
 ## Commands & buttons

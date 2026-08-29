@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+data
+*.log
+.git
+.gitignore
+test
+docs
+README.md
+Dockerfile
+.dockerignore
+deploy.sh
+deploy.ps1

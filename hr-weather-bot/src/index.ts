@@ -32,10 +32,12 @@ async function main(): Promise<void> {
     );
   }
 
-  const weather: WeatherSource = createWeatherSource(
-    config.weatherSource,
-    config.weatherHttpUrl,
-  );
+  const weather: WeatherSource = createWeatherSource(config.weatherSource, {
+    httpUrl: config.weatherHttpUrl,
+    latitude: config.openMeteoLatitude,
+    longitude: config.openMeteoLongitude,
+    locationName: config.openMeteoLocationName,
+  });
 
   const bot = new Bot(config.telegramBotToken);
   const messenger = new GrammYMessenger(
@@ -79,9 +81,9 @@ async function main(): Promise<void> {
 
   // Initial + periodic check.
   await checkOnce();
-  if (config.weatherSource === "http") {
-    setInterval(checkOnce, config.weatherHttpIntervalMs);
-    log.info(`Weather polling every ${config.weatherHttpIntervalMs}ms`);
+  if (config.weatherSource === "http" || config.weatherSource === "open-meteo") {
+    setInterval(checkOnce, config.weatherPollIntervalMs);
+    log.info(`Weather polling every ${config.weatherPollIntervalMs}ms`);
   }
 
   await bot.start({

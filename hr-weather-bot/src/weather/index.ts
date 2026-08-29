@@ -1,4 +1,5 @@
 import type { WeatherThreat } from "../types.js";
+import { OpenMeteoWeatherSource } from "./open-meteo.js";
 
 /**
  * Weather sources are pluggable. `check()` returns a threat when dangerous
@@ -61,16 +62,29 @@ export class HttpWeatherSource implements WeatherSource {
   }
 }
 
+export interface WeatherSourceOptions {
+  httpUrl: string;
+  latitude: number;
+  longitude: number;
+  locationName: string;
+}
+
 export function createWeatherSource(
-  kind: "mock" | "http" | "noop",
-  httpUrl: string,
+  kind: "mock" | "http" | "noop" | "open-meteo",
+  opts: WeatherSourceOptions,
 ): WeatherSource {
   switch (kind) {
+    case "open-meteo":
+      return new OpenMeteoWeatherSource(
+        opts.latitude,
+        opts.longitude,
+        opts.locationName,
+      );
     case "http":
-      if (!httpUrl) {
+      if (!opts.httpUrl) {
         throw new Error("WEATHER_HTTP_URL is required when WEATHER_SOURCE=http");
       }
-      return new HttpWeatherSource(httpUrl);
+      return new HttpWeatherSource(opts.httpUrl);
     case "noop":
       return new NoopWeatherSource();
     case "mock":
