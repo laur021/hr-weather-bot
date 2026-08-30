@@ -17,6 +17,8 @@ export const CB = {
   edit: "edit",
   discard: "discard",
   status: "status",
+  stopAlerts: "stop-alerts",
+  continueMonitoring: "continue-monitoring",
 } as const;
 
 export type CallbackAction = (typeof CB)[keyof typeof CB];

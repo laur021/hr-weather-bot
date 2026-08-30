@@ -78,6 +78,7 @@ needs its own bot token, group IDs, and location.
 - `/checkweather` — force a weather check (HR group only)
 - `📝 Compose Draft` / `❌ Discard` — on the weather alert
 - `✅ Send to Employees` / `✏️ Edit` / `❌ Discard` — on the draft preview
+- After a successful send, HR can stop same-day alerts or continue monitoring. Continued monitoring only alerts HR when the threat type or severity changes; stopped monitoring still allows a higher-severity alert.
 - After selecting `✏️ Edit`, send the complete revised employee announcement as your next message. The bot saves it as a new version and shows the Send/Discard confirmation buttons.
 - Other free-text in the HR group is treated as an AI edit instruction for the latest draft.
 

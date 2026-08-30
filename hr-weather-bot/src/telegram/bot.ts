@@ -105,6 +105,12 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
         case CB.discard:
           await workflow.discard(msgChatId, decoded.eventId, user);
           break;
+        case CB.stopAlerts:
+          await workflow.chooseMonitoring(msgChatId, decoded.eventId, "STOPPED", user);
+          break;
+        case CB.continueMonitoring:
+          await workflow.chooseMonitoring(msgChatId, decoded.eventId, "CONTINUING", user);
+          break;
         case CB.status:
           await ctx.reply(await workflow.latestStatus());
           break;

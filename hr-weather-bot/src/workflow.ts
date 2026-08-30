@@ -2,12 +2,13 @@ import type { AiProvider } from "./ai/prompts.js";
 import { assertHrChat } from "./auth.js";
 import { CB } from "./constants.js";
 import { encodeCallback } from "./telegram/callback.js";
-import { formatManila, makeEventId, nowIso } from "./time.js";
+import { formatManila, makeEventId, manilaDay, nowIso } from "./time.js";
 import type { EventStore } from "./store/store.js";
 import { assertTransition } from "./state/stateMachine.js";
 import type {
   Keyboard,
   Messenger,
+  MonitoringMode,
   TelegramUser,
   WeatherEvent,
   WeatherThreat,
@@ -34,6 +35,8 @@ const SEVERITY_ICON: Record<string, string> = {
   emergency: "🔴",
 };
 
+const SEVERITY_ORDER = { watch: 1, warning: 2, emergency: 3 } as const;
+
 export class WeatherWorkflow {
   /** Serializes mutations per event to prevent lost updates on concurrent edits. */
   private locks = new Map<string, Promise<unknown>>();
@@ -58,7 +61,11 @@ export class WeatherWorkflow {
         updatedAt: nowIso(),
       };
       await this.store.upsert(updated);
-      await this.notifyHrAlert(updated);
+      return;
+    }
+
+    const monitoring = await this.latestMonitoringForToday();
+    if (monitoring && !this.shouldNotifyAfterSentAdvisory(threat, monitoring)) {
       return;
     }
 
@@ -263,6 +270,48 @@ export class WeatherWorkflow {
     });
   }
 
+  /** Record HR's same-day preference after an employee announcement is sent. */
+  async chooseMonitoring(
+    chatId: number | null | undefined,
+    eventId: string,
+    mode: Extract<MonitoringMode, "CONTINUING" | "STOPPED">,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+      if (
+        event.status !== "SENT" ||
+        !event.monitoring ||
+        event.monitoring.day !== manilaDay()
+      ) {
+        throw new WorkflowError(
+          "INVALID_STATE",
+          "This monitoring choice is available only for an advisory sent today.",
+        );
+      }
+
+      const updated: WeatherEvent = {
+        ...event,
+        updatedAt: nowIso(),
+        monitoring: {
+          ...event.monitoring,
+          mode,
+          decidedByTelegramUserId: user.id,
+          decidedByTelegramUsername: user.username,
+          decidedByDisplayName: user.displayName,
+          decidedAt: nowIso(),
+        },
+      };
+      await this.store.upsert(updated);
+      await this.messenger.sendToHr(
+        mode === "STOPPED"
+          ? "🛑 HR weather alerts are stopped for the rest of today. A higher severity alert will still be shown."
+          : "🔔 Monitoring continues. HR will be alerted only if the weather threat type or severity changes.",
+      );
+    });
+  }
+
   async latestStatus(): Promise<string> {
     const event = await this.store.latestActive();
     if (!event) {
@@ -350,6 +399,10 @@ export class WeatherWorkflow {
         sentAt: nowIso(),
         sentMessageId: result.messageId,
         sendError: undefined,
+        monitoring: {
+          day: manilaDay(),
+          mode: "PENDING",
+        },
       };
       await this.store.upsert(sent);
       await this.messenger.sendToHr(
@@ -361,7 +414,10 @@ export class WeatherWorkflow {
           `Event: ${event.id} (draft v${draft.version})`,
           `Sent by: ${event.approvedByDisplayName ?? event.approvedByTelegramUsername ?? "HR"}`,
           `Time: ${formatManila(nowIso())}`,
+          ``,
+          `Would you like to receive another HR alert if weather conditions change later today?`,
         ].join("\n"),
+        this.monitoringKeyboard(event.id),
       );
     } else {
       const failed: WeatherEvent = {
@@ -436,6 +492,15 @@ export class WeatherWorkflow {
     ];
   }
 
+  private monitoringKeyboard(eventId: string): Keyboard {
+    return [
+      [
+        { text: "🛑 Stop alerts today", data: encodeCallback(CB.stopAlerts, eventId) },
+        { text: "🔔 Continue monitoring", data: encodeCallback(CB.continueMonitoring, eventId) },
+      ],
+    ];
+  }
+
   private async mustGet(eventId: string): Promise<WeatherEvent> {
     const event = await this.store.get(eventId);
     if (!event) throw new WorkflowError("NOT_FOUND", `Event ${eventId} not found.`);
@@ -446,6 +511,38 @@ export class WeatherWorkflow {
     const active = await this.store.listActive();
     return active.find(
       (e) => e.weather.title === threat.title && e.weather.severity === threat.severity,
+    );
+  }
+
+  private async latestMonitoringForToday(): Promise<WeatherEvent | undefined> {
+    const today = manilaDay();
+    const events = await this.store.list();
+    return events.find(
+      (event) =>
+        event.status === "SENT" &&
+        event.monitoring?.day === today &&
+        Boolean(event.sentAt),
+    );
+  }
+
+  private shouldNotifyAfterSentAdvisory(
+    threat: WeatherThreat,
+    sentEvent: WeatherEvent,
+  ): boolean {
+    const monitoring = sentEvent.monitoring;
+    if (!monitoring) return true;
+
+    const previousSeverity = SEVERITY_ORDER[sentEvent.weather.severity];
+    const newSeverity = SEVERITY_ORDER[threat.severity];
+    if (monitoring.mode === "STOPPED") {
+      return newSeverity > previousSeverity;
+    }
+
+    // Pending and continuing monitoring both avoid repeat alerts, but allow
+    // a severity or threat-type change to open a new HR approval workflow.
+    return (
+      threat.severity !== sentEvent.weather.severity ||
+      threat.title !== sentEvent.weather.title
     );
   }
 

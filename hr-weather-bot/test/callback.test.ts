@@ -23,6 +23,15 @@ describe("callback encoding", () => {
     });
   });
 
+  it("round-trips monitoring callbacks", () => {
+    const enc = encodeCallback(CB.stopAlerts, "weather_20260829_001");
+    expect(decodeCallback(enc)).toEqual({
+      action: CB.stopAlerts,
+      eventId: "weather_20260829_001",
+      version: undefined,
+    });
+  });
+
   it("rejects malformed or unknown data", () => {
     expect(() => decodeCallback(undefined)).toThrow();
     expect(() => decodeCallback("")).toThrow();

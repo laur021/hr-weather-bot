@@ -13,6 +13,19 @@ export function formatManila(iso: string): string {
   }).format(d);
 }
 
+/** Manila calendar date, used for same-day alert suppression. */
+export function manilaDay(iso = nowIso()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const part = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
 /** `weather_YYYYMMDD_NNN` — readable, spec-style event id. */
 export function makeEventId(iso: string, seq: number): string {
   const d = new Date(iso);

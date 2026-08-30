@@ -49,11 +49,13 @@ class FakeAi implements AiProvider {
 
 class FakeMessenger implements Messenger {
   hr: string[] = [];
+  hrMessages: Array<{ text: string; keyboard?: Keyboard }> = [];
   employees: string[] = [];
   employeeResult: SendResult = { ok: true, messageId: 42 };
 
-  async sendToHr(text: string, _kb?: Keyboard): Promise<void> {
+  async sendToHr(text: string, keyboard?: Keyboard): Promise<void> {
     this.hr.push(text);
+    this.hrMessages.push({ text, keyboard });
   }
   async sendToEmployees(text: string): Promise<SendResult> {
     this.employees.push(text);
@@ -69,13 +71,14 @@ function setup() {
   return { store, ai, messenger, workflow };
 }
 
-function makeThreat(): WeatherThreat {
+function makeThreat(overrides: Partial<WeatherThreat> = {}): WeatherThreat {
   return {
     severity: "warning",
     title: "Severe Tropical Storm",
     description: "Heavy rain expected.",
     source: "test",
     detectedAt: new Date().toISOString(),
+    ...overrides,
   };
 }
 
@@ -83,6 +86,17 @@ async function detectEvent(workflow: WeatherWorkflow) {
   await workflow.onWeatherDetected(makeThreat());
   const store = (workflow as unknown as { store: FakeStore }).store;
   return (await store.latestActive())!;
+}
+
+async function sendEvent(
+  ctx: ReturnType<typeof setup>,
+  threat: WeatherThreat = makeThreat(),
+): Promise<WeatherEvent> {
+  await ctx.workflow.onWeatherDetected(threat);
+  const event = (await ctx.store.listActive())[0]!;
+  await ctx.workflow.compose(HR, event.id, ALICE);
+  await ctx.workflow.send(HR, event.id, 1, ALICE);
+  return (await ctx.store.get(event.id))!;
 }
 
 describe("WeatherWorkflow", () => {
@@ -125,6 +139,62 @@ describe("WeatherWorkflow", () => {
     expect(sent.approvedByDisplayName).toBe("Alice HR");
     expect(ctx.messenger.employees).toHaveLength(1);
     expect(ctx.messenger.employees[0]).toContain("Severe Tropical Storm");
+    expect(sent.monitoring?.mode).toBe("PENDING");
+    expect(ctx.messenger.hrMessages.at(-1)?.keyboard?.[0].map((b) => b.text)).toEqual([
+      "🛑 Stop alerts today",
+      "🔔 Continue monitoring",
+    ]);
+  });
+
+  it("suppresses duplicate weather alerts for an existing active event", async () => {
+    await ctx.workflow.onWeatherDetected(makeThreat());
+    expect(ctx.messenger.hr).toHaveLength(1);
+
+    await ctx.workflow.onWeatherDetected(
+      makeThreat({ description: "Heavy rain is still expected." }),
+    );
+    expect(ctx.messenger.hr).toHaveLength(1);
+    const event = (await ctx.store.listActive())[0]!;
+    expect(event.weather.description).toBe("Heavy rain is still expected.");
+
+    await ctx.workflow.compose(HR, event.id, ALICE);
+    expect(ctx.messenger.hr).toHaveLength(2);
+    await ctx.workflow.onWeatherDetected(makeThreat());
+    expect(ctx.messenger.hr).toHaveLength(2);
+  });
+
+  it("stops same-or-lower severity alerts but permits escalation", async () => {
+    const sent = await sendEvent(ctx);
+    await ctx.workflow.chooseMonitoring(HR, sent.id, "STOPPED", ALICE);
+    const before = ctx.messenger.hr.length;
+
+    await ctx.workflow.onWeatherDetected(makeThreat({ severity: "watch" }));
+    expect(ctx.messenger.hr).toHaveLength(before);
+
+    await ctx.workflow.onWeatherDetected(makeThreat({ severity: "emergency" }));
+    expect(ctx.messenger.hr).toHaveLength(before + 1);
+    expect((await ctx.store.listActive())[0]?.weather.severity).toBe("emergency");
+  });
+
+  it("continues monitoring only when the threat type or severity changes", async () => {
+    const sent = await sendEvent(ctx);
+    await ctx.workflow.chooseMonitoring(HR, sent.id, "CONTINUING", ALICE);
+    const before = ctx.messenger.hr.length;
+
+    await ctx.workflow.onWeatherDetected(makeThreat());
+    expect(ctx.messenger.hr).toHaveLength(before);
+
+    await ctx.workflow.onWeatherDetected(
+      makeThreat({ title: "Flash Flood Warning" }),
+    );
+    expect(ctx.messenger.hr).toHaveLength(before + 1);
+  });
+
+  it("rejects a monitoring choice from a non-HR chat", async () => {
+    const sent = await sendEvent(ctx);
+    await expect(
+      ctx.workflow.chooseMonitoring(EMP, sent.id, "STOPPED", ALICE),
+    ).rejects.toThrow(/authorized HR group/);
   });
 
   it("blocks a second send (double-send protection)", async () => {

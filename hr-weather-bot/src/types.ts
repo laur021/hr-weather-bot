@@ -9,6 +9,9 @@ export type EventStatus =
 
 export type Severity = "watch" | "warning" | "emergency";
 
+/** HR's choice for alerts after an employee advisory has been sent. */
+export type MonitoringMode = "PENDING" | "CONTINUING" | "STOPPED";
+
 export interface WeatherThreat {
   severity: Severity;
   title: string;
@@ -31,6 +34,16 @@ export interface TelegramUser {
   id: number;
   username?: string;
   displayName?: string;
+}
+
+export interface DailyMonitoringDecision {
+  /** Manila calendar date, formatted YYYY-MM-DD. */
+  day: string;
+  mode: MonitoringMode;
+  decidedByTelegramUserId?: number;
+  decidedByTelegramUsername?: string;
+  decidedByDisplayName?: string;
+  decidedAt?: string;
 }
 
 export interface WeatherEvent {
@@ -62,6 +75,9 @@ export interface WeatherEvent {
   sentAt?: string;
   sentMessageId?: number;
   sendError?: string;
+
+  /** Same-day HR monitoring preference set after a successful send. */
+  monitoring?: DailyMonitoringDecision;
 }
 
 export interface SendResult {
