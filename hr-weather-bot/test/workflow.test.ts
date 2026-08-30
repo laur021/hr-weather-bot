@@ -167,6 +167,20 @@ describe("WeatherWorkflow", () => {
     expect(ctx.messenger.employees[0]).toContain("[revised: add flooding advice]");
   });
 
+  it("saves an HR-written replacement as the next draft version", async () => {
+    const event = await detectEvent(ctx.workflow);
+    await ctx.workflow.compose(HR, event.id, ALICE);
+
+    const replacement = "All employees may work from home today due to flooding risk.";
+    await ctx.workflow.replaceDraft(HR, event.id, replacement, ALICE);
+
+    const updated = (await ctx.store.get(event.id))!;
+    expect(updated.draft?.version).toBe(2);
+    expect(updated.draft?.text).toBe(replacement);
+    expect(updated.draftHistory).toHaveLength(2);
+    expect(ctx.messenger.hr.at(-1)).toContain("Draft — Version 2");
+  });
+
   it("discard prevents sending", async () => {
     const event = await detectEvent(ctx.workflow);
     await ctx.workflow.compose(HR, event.id, ALICE);

@@ -34,6 +34,10 @@ export interface BotDeps {
 
 export function registerHandlers(bot: Bot, deps: BotDeps): void {
   const { workflow, hrChatId, employeeChatId, log } = deps;
+  // Associate an Edit request with one HR user to avoid cross-user overwrites.
+  const pendingManualDrafts = new Map<string, string>();
+  const pendingKey = (chatId: number, userId: number | undefined): string =>
+    `${chatId}:${userId ?? 0}`;
 
   bot.command("start", async (ctx) => {
     await ctx.reply(
@@ -89,8 +93,13 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
           await workflow.send(msgChatId, decoded.eventId, decoded.version, user);
           break;
         case CB.edit:
+          pendingManualDrafts.set(pendingKey(msgChatId!, cb.from?.id), decoded.eventId);
           await ctx.reply(
-            `✏️ Reply to this chat with your edit instructions for ${decoded.eventId}.\n\nExample: "Make this shorter and mention possible flooding."`,
+            [
+              `✏️ Send your revised employee announcement for ${decoded.eventId} as your next message.`,
+              "",
+              "I’ll save it as a new draft version, then show the Send to Employees or Discard buttons for confirmation.",
+            ].join("\n"),
           );
           break;
         case CB.discard:
@@ -116,6 +125,17 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
     }
 
     if (isHrChat(chatId, hrChatId)) {
+      const key = pendingKey(chatId!, ctx.from?.id);
+      const eventId = pendingManualDrafts.get(key);
+      if (eventId) {
+        try {
+          await workflow.replaceDraft(chatId, eventId, text, toUser(ctx.from));
+          pendingManualDrafts.delete(key);
+        } catch (err) {
+          await handleWorkflowError(ctx, err as WorkflowError, workflow, eventId);
+        }
+        return;
+      }
       await handleHrMessage(ctx, text, deps);
       return;
     }

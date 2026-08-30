@@ -78,7 +78,8 @@ needs its own bot token, group IDs, and location.
 - `/checkweather` — force a weather check (HR group only)
 - `📝 Compose Draft` / `❌ Discard` — on the weather alert
 - `✅ Send to Employees` / `✏️ Edit` / `❌ Discard` — on the draft preview
-- Free-text in the HR group is treated as an edit instruction for the latest draft.
+- After selecting `✏️ Edit`, send the complete revised employee announcement as your next message. The bot saves it as a new version and shows the Send/Discard confirmation buttons.
+- Other free-text in the HR group is treated as an AI edit instruction for the latest draft.
 
 ## Tests
 

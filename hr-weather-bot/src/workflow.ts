@@ -143,6 +143,44 @@ export class WeatherWorkflow {
     });
   }
 
+  /** Save a complete replacement drafted by HR, without AI rewriting it. */
+  async replaceDraft(
+    chatId: number | null | undefined,
+    eventId: string,
+    text: string,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    const replacement = text.trim();
+    if (!replacement) {
+      throw new WorkflowError("INVALID_STATE", "The replacement draft cannot be empty.");
+    }
+
+    await this.withLock(eventId, async () => {
+      const event = await this.mustGet(eventId);
+      if (event.status !== "WAITING_FOR_APPROVAL" || !event.draft) {
+        throw new WorkflowError("INVALID_STATE", "There is no draft awaiting edits for this event.");
+      }
+
+      const draft = {
+        version: event.draft.version + 1,
+        text: replacement,
+        editedByTelegramUserId: user.id,
+        editedByTelegramUsername: user.username,
+        editedByDisplayName: user.displayName,
+        editedAt: nowIso(),
+      };
+      const updated: WeatherEvent = {
+        ...event,
+        updatedAt: nowIso(),
+        draft,
+        draftHistory: [...event.draftHistory, draft],
+      };
+      await this.store.upsert(updated);
+      await this.sendDraftPreview(updated);
+    });
+  }
+
   async send(
     chatId: number | null | undefined,
     eventId: string,
