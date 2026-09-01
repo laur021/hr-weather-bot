@@ -58,9 +58,12 @@ jobs:
           DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
           DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/chat/completions' }}
           WEATHER_SOURCE: ${{ vars.WEATHER_SOURCE || 'open-meteo' }}
-          OPEN_METEO_LATITUDE: ${{ vars.OPEN_METEO_LATITUDE || '14.5995' }}
-          OPEN_METEO_LONGITUDE: ${{ vars.OPEN_METEO_LONGITUDE || '120.9842' }}
-          OPEN_METEO_LOCATION_NAME: ${{ vars.OPEN_METEO_LOCATION_NAME || 'Metro Manila' }}
+          OFFICE_NAME: ${{ vars.OFFICE_NAME || vars.OPEN_METEO_LOCATION_NAME || 'Metro Manila' }}
+          OFFICE_ADDRESS: ${{ vars.OFFICE_ADDRESS || vars.OFFICE_NAME || 'Metro Manila' }}
+          OFFICE_LATITUDE: ${{ vars.OFFICE_LATITUDE || vars.OPEN_METEO_LATITUDE || '14.5995' }}
+          OFFICE_LONGITUDE: ${{ vars.OFFICE_LONGITUDE || vars.OPEN_METEO_LONGITUDE || '120.9842' }}
+          OFFICE_TIMEZONE: ${{ vars.OFFICE_TIMEZONE || 'Asia/Manila' }}
+          OFFICE_LOCALITY_MATCHES: ${{ vars.OFFICE_LOCALITY_MATCHES || 'NCR,National Capital Region,Metro Manila,Quezon City' }}
           WEATHER_POLL_INTERVAL_MS: ${{ vars.WEATHER_POLL_INTERVAL_MS || '600000' }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL || 'info' }}
         run: |
@@ -100,9 +103,12 @@ jobs:
             "DEEPSEEK_BASE_URL=$env:DEEPSEEK_BASE_URL"
             "OPENAI_API_KEY=$env:OPENAI_API_KEY"
             "WEATHER_SOURCE=$env:WEATHER_SOURCE"
-            "OPEN_METEO_LATITUDE=$env:OPEN_METEO_LATITUDE"
-            "OPEN_METEO_LONGITUDE=$env:OPEN_METEO_LONGITUDE"
-            "OPEN_METEO_LOCATION_NAME=$env:OPEN_METEO_LOCATION_NAME"
+            "OFFICE_NAME=$env:OFFICE_NAME"
+            "OFFICE_ADDRESS=$env:OFFICE_ADDRESS"
+            "OFFICE_LATITUDE=$env:OFFICE_LATITUDE"
+            "OFFICE_LONGITUDE=$env:OFFICE_LONGITUDE"
+            "OFFICE_TIMEZONE=$env:OFFICE_TIMEZONE"
+            "OFFICE_LOCALITY_MATCHES=$env:OFFICE_LOCALITY_MATCHES"
             "WEATHER_POLL_INTERVAL_MS=$env:WEATHER_POLL_INTERVAL_MS"
             "DATA_DIR=./data"
             "LOG_LEVEL=$env:LOG_LEVEL"

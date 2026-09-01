@@ -5,7 +5,10 @@ import { encodeCallback } from "./telegram/callback.js";
 import { formatManila, makeEventId, manilaDay, nowIso } from "./time.js";
 import type { EventStore } from "./store/store.js";
 import { assertTransition } from "./state/stateMachine.js";
+import { msToKmh } from "./weather/classify.js";
+import { pagasaRiskFingerprint } from "./weather/pagasa.js";
 import type {
+  HrWeatherAdvisory,
   Keyboard,
   Messenger,
   MonitoringMode,
@@ -52,23 +55,36 @@ export class WeatherWorkflow {
   // ---------------------------------------------------------------------
   // Weather detection (automatic)
   // ---------------------------------------------------------------------
-  async onWeatherDetected(threat: WeatherThreat): Promise<void> {
+  async onWeatherDetected(threat: WeatherThreat): Promise<WeatherEvent | undefined> {
     const existing = await this.findEventFor(threat);
     if (existing) {
+      const materialRiskChange = this.isMaterialRiskChange(existing.weather, threat);
       const updated: WeatherEvent = {
         ...existing,
         weather: { ...threat, detectedAt: existing.weather.detectedAt },
         updatedAt: nowIso(),
       };
-      await this.store.upsert(updated);
-      return;
+      if (!materialRiskChange || existing.status === "DETECTED") {
+        await this.store.upsert(updated);
+        if (materialRiskChange) await this.notifyHrAlert(updated);
+        return updated;
+      }
+      // Do not silently rewrite a draft HR may already be reviewing.
+      return this.createDetectedEvent(threat, existing);
     }
 
     const monitoring = await this.latestMonitoringForToday();
     if (monitoring && !this.shouldNotifyAfterSentAdvisory(threat, monitoring)) {
-      return;
+      return undefined;
     }
 
+    return this.createDetectedEvent(threat);
+  }
+
+  private async createDetectedEvent(
+    threat: WeatherThreat,
+    revisionOf?: WeatherEvent,
+  ): Promise<WeatherEvent> {
     const id = makeEventId(nowIso(), await this.nextSeq());
     const event: WeatherEvent = {
       id,
@@ -77,9 +93,12 @@ export class WeatherWorkflow {
       updatedAt: nowIso(),
       weather: threat,
       draftHistory: [],
+      revisionOfEventId: revisionOf?.id,
+      revisionNumber: revisionOf ? (revisionOf.revisionNumber ?? 1) + 1 : 1,
     };
     await this.store.upsert(event);
     await this.notifyHrAlert(event);
+    return event;
   }
 
   /** Create an HR-authored announcement that still requires explicit approval. */
@@ -384,16 +403,13 @@ export class WeatherWorkflow {
     const event = await this.latestWeatherActive();
     if (!event) return { text: await this.latestStatus() };
 
-    const keyboard =
-      event.status === "DETECTED"
-        ? this.alertKeyboard(event.id)
-        : event.status === "WAITING_FOR_APPROVAL" && event.draft
-          ? this.draftKeyboard(event.id, event.draft.version)
-          : event.status === "SEND_FAILED" && event.draft
-            ? [[{ text: "🔁 Retry Send", data: encodeCallback(CB.send, event.id, event.draft.version) }]]
-            : undefined;
+    return { text: await this.latestStatus(), keyboard: this.actionsForEvent(event) };
+  }
 
-    return { text: await this.latestStatus(), keyboard };
+  /** Actions currently available for one exact weather advisory. */
+  async actionsForEventId(eventId: string): Promise<Keyboard | undefined> {
+    const event = await this.store.get(eventId);
+    return event ? this.actionsForEvent(event) : undefined;
   }
 
   /** Edit the latest active draft (for free-text HR instructions). */
@@ -521,18 +537,10 @@ export class WeatherWorkflow {
   }
 
   private async notifyHrAlert(event: WeatherEvent): Promise<void> {
-    const icon = SEVERITY_ICON[event.weather.severity] ?? "ℹ️";
     await this.messenger.sendToHr(
-      [
-        `🚨 Weather Alert — ${event.weather.severity.toUpperCase()}`,
-        ``,
-        `${icon} ${event.weather.title}`,
-        event.weather.description,
-        ``,
-        `Event: ${event.id}`,
-        `Detected: ${formatManila(event.weather.detectedAt)}`,
-      ].join("\n"),
+      formatHrWeatherAlert(event.weather),
       this.alertKeyboard(event.id),
+      { parseMode: "HTML" },
     );
   }
 
@@ -588,12 +596,32 @@ export class WeatherWorkflow {
 
   private async findEventFor(threat: WeatherThreat): Promise<WeatherEvent | undefined> {
     const active = await this.store.listActive();
-    return active.find(
-      (e) =>
-        e.kind !== "manual" &&
-        e.weather.title === threat.title &&
-        e.weather.severity === threat.severity,
+    return active
+      .filter(
+        (event) =>
+          event.kind !== "manual" &&
+          weatherLocation(event.weather) === weatherLocation(threat),
+      )
+      .at(-1);
+  }
+
+  private isMaterialRiskChange(previous: WeatherThreat, next: WeatherThreat): boolean {
+    return (
+      previous.title !== next.title ||
+      previous.severity !== next.severity ||
+      pagasaRiskFingerprint(previous.officialPagasa) !==
+        pagasaRiskFingerprint(next.officialPagasa)
     );
+  }
+
+  private actionsForEvent(event: WeatherEvent): Keyboard | undefined {
+    return event.status === "DETECTED"
+      ? this.alertKeyboard(event.id)
+      : event.status === "WAITING_FOR_APPROVAL" && event.draft
+        ? this.draftKeyboard(event.id, event.draft.version)
+        : event.status === "SEND_FAILED" && event.draft
+          ? [[{ text: "🔁 Retry Send", data: encodeCallback(CB.send, event.id, event.draft.version) }]]
+          : undefined;
   }
 
   private async latestWeatherActive(): Promise<WeatherEvent | undefined> {
@@ -650,4 +678,153 @@ export class WeatherWorkflow {
     );
     return run;
   }
+}
+
+const HR_ADVISORY_LABEL: Record<WeatherThreat["severity"], string> = {
+  watch: "Weather Watch",
+  warning: "Weather Warning",
+  emergency: "Severe Weather Emergency",
+};
+
+const HR_UPDATE_LABEL = "Weather Update";
+
+const HR_RECOMMENDATION: Record<WeatherThreat["severity"], string> = {
+  watch:
+    "Please monitor weather and transport conditions closely throughout the day. Prepare a staff advisory if conditions worsen, particularly for employees travelling to or from the office. No work-suspension announcement is recommended at this time.",
+  warning:
+    "Review transport and staffing risks closely. Prepare a staff advisory and contingency arrangements for affected employees; escalate to management if conditions worsen.",
+  emergency:
+    "Issue an urgent staff advisory and assess work-suspension or remote-work measures immediately. Prioritize employee safety and transport risks.",
+};
+
+const HR_CLEAR_RECOMMENDATION =
+  "Conditions do not require a staff advisory at this time. Continue routine monitoring and reassess if weather or transport conditions worsen.";
+
+const HR_SEVERITY_ICON: Record<WeatherThreat["severity"], string> = {
+  watch: "🟡",
+  warning: "🟠",
+  emergency: "🔴",
+};
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[character]!;
+  });
+}
+
+function forecastSentence(advisory: HrWeatherAdvisory): string {
+  const condition = advisory.condition.toLowerCase();
+  const forecast = /thunderstorm/.test(condition)
+    ? `A ${condition} is expected today`
+    : `${advisory.condition} conditions are expected today`;
+  return `${forecast}, with a ${advisory.rainChancePercent}% chance of rain, around ${advisory.expectedRainfallMm} mm expected rainfall, and wind gusts reaching up to ${Math.round(msToKmh(advisory.peakWindGustMs))} km/h (${round(advisory.peakWindGustMs)} m/s).`;
+}
+
+export function formatHrWeatherAlert(weather: WeatherThreat): string {
+  const advisory = weather.hrAdvisory;
+  if (!advisory) {
+    return [
+      `${HR_SEVERITY_ICON[weather.severity]} <b>${displaySeverity(weather.severity)} — ${HR_ADVISORY_LABEL[weather.severity]}</b>`,
+      escapeHtml(weather.title),
+      escapeHtml(weather.description),
+      "",
+      `<b>HR recommendation:</b> ${HR_RECOMMENDATION[weather.severity]}`,
+      "Next update: as conditions change or in the next scheduled weather check.",
+    ].join("\n");
+  }
+
+  return formatHrWeatherUpdate(advisory.location, advisory, weather.severity);
+}
+
+/** Format the response for a user-requested location, with or without a threat. */
+export function formatHrWeatherUpdate(
+  location: string,
+  advisory?: HrWeatherAdvisory,
+  severity?: WeatherThreat["severity"],
+  fallback?: string,
+): string {
+  const icon = severity ? HR_SEVERITY_ICON[severity] : "ℹ️";
+  const label = severity ? HR_ADVISORY_LABEL[severity] : HR_UPDATE_LABEL;
+  const recommendation = severity
+    ? HR_RECOMMENDATION[severity]
+    : HR_CLEAR_RECOMMENDATION;
+  const forecast = advisory
+    ? forecastSentence(advisory)
+    : fallback ?? "No detailed forecast metrics are available from this weather source.";
+  const office = advisory ? formatOffice(advisory, location) : escapeHtml(location);
+  const officialLines = advisory?.officialPagasa
+    ? formatOfficialContext(advisory.officialPagasa, location)
+    : [];
+
+  return [
+    `${icon} <b>${severity ? displaySeverity(severity) : "INFO"} — ${label}</b>`,
+    `<b>Office:</b> ${office}`,
+    `<b>Local forecast:</b> ${escapeHtml(forecast)}`,
+    ...officialLines,
+    `<b>HR recommendation:</b> ${recommendation}`,
+    "Next update: as conditions change or in the next scheduled weather check.",
+  ].join("\n");
+}
+
+function weatherLocation(weather: WeatherThreat): string | undefined {
+  return weather.hrAdvisory?.location.trim().toLocaleLowerCase();
+}
+
+function formatOffice(advisory: HrWeatherAdvisory, fallback: string): string {
+  const nameAndAddress = advisory.address && advisory.address !== advisory.location
+    ? `${advisory.location} — ${advisory.address}`
+    : advisory.location || fallback;
+  const coordinates =
+    typeof advisory.latitude === "number" && typeof advisory.longitude === "number"
+      ? ` (${advisory.latitude.toFixed(4)}, ${advisory.longitude.toFixed(4)}; ${advisory.timezone ?? "Asia/Manila"})`
+      : "";
+  return `${escapeHtml(nameAndAddress)}${escapeHtml(coordinates)}`;
+}
+
+function formatOfficialContext(
+  official: NonNullable<HrWeatherAdvisory["officialPagasa"]>,
+  location: string,
+): string[] {
+  const checked = formatManila(official.checkedAt);
+  let context: string;
+  if (official.officialVerificationStatus === "VERIFIED") {
+    context = `${official.cycloneClassification} ${official.cycloneName} is identified by PAGASA and the office area is explicitly included.`;
+  } else if (official.officialVerificationStatus === "ACTIVE_BULLETIN_NO_DIRECT_IMPACT") {
+    context = `${official.cycloneClassification} ${official.cycloneName} is active, but PAGASA does not verify a direct tropical-cyclone impact on ${location}.`;
+  } else if (official.officialVerificationStatus === "NO_APPLICABLE_BULLETIN") {
+    context = `No active PAGASA tropical cyclone bulletin affecting ${location} was found as of ${checked}.`;
+  } else {
+    context = `Official PAGASA bulletin verification is temporarily unavailable as of ${checked}.`;
+  }
+
+  const issued = official.bulletinIssuedAt ?? official.weatherAdvisory?.issuedAt ?? checked;
+  const lines = [
+    `<b>Official PAGASA:</b> ${escapeHtml(context)}`,
+    `<b>Office in official affected-area text:</b> ${official.officeAreaExplicitlyAffected ? "Yes" : "No"}`,
+    `<b>Source:</b> ${escapeHtml(official.sourceUrl)}`,
+    `<b>Issued/checked:</b> ${escapeHtml(issued)}`,
+  ];
+  if (official.rainfallCause && /Southwest Monsoon|Habagat/i.test(official.rainfallCause)) {
+    lines.push(
+      "<b>Note:</b> Current rain or gust conditions are attributed to the Southwest Monsoon (Habagat), not a verified direct cyclone impact on the office.",
+    );
+  }
+  return lines;
+}
+
+function displaySeverity(severity: WeatherThreat["severity"]): "WATCH" | "WARNING" | "CRITICAL" {
+  return severity === "emergency"
+    ? "CRITICAL"
+    : severity.toUpperCase() as "WATCH" | "WARNING";
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
 }

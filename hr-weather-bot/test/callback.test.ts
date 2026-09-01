@@ -32,6 +32,15 @@ describe("callback encoding", () => {
     });
   });
 
+  it("round-trips manual-announcement callbacks", () => {
+    const enc = encodeCallback(CB.createAnnouncement, "manual");
+    expect(decodeCallback(enc)).toEqual({
+      action: CB.createAnnouncement,
+      eventId: "manual",
+      version: undefined,
+    });
+  });
+
   it("rejects malformed or unknown data", () => {
     expect(() => decodeCallback(undefined)).toThrow();
     expect(() => decodeCallback("")).toThrow();

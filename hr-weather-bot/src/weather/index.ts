@@ -1,17 +1,37 @@
-import type { WeatherThreat } from "../types.js";
+import type { HrWeatherAdvisory, WeatherThreat } from "../types.js";
 import { OpenMeteoWeatherSource } from "./open-meteo.js";
 
 /**
- * Weather sources are pluggable. `check()` returns a threat when dangerous
- * weather is detected, or null when conditions are clear.
+ * Weather sources return both a human-readable current forecast summary and
+ * an optional threat when alert thresholds are reached.
  */
+export interface WeatherCheckResult {
+  threat: WeatherThreat | null;
+  summary: string;
+  /** The HR workflow event created or updated for this check, when applicable. */
+  eventId?: string;
+  /** Forecast metrics for the requested location, even if no threat is active. */
+  advisory?: HrWeatherAdvisory;
+}
+
+export interface WeatherLocation {
+  name: string;
+  latitude?: number;
+  longitude?: number;
+  timezone?: string;
+  /** ISO 3166-1 alpha-2 country code when resolved by the geocoder. */
+  countryCode?: string;
+  /** Locality aliases suitable for matching official regional advisories. */
+  localityMatchList?: string[];
+}
+
 export interface WeatherSource {
-  check(): Promise<WeatherThreat | null>;
+  check(): Promise<WeatherCheckResult>;
 }
 
 export class NoopWeatherSource implements WeatherSource {
-  async check(): Promise<WeatherThreat | null> {
-    return null;
+  async check(): Promise<WeatherCheckResult> {
+    return { threat: null, summary: "Weather checks are disabled." };
   }
 }
 
@@ -28,8 +48,14 @@ export class MockWeatherSource implements WeatherSource {
     },
   ) {}
 
-  async check(): Promise<WeatherThreat | null> {
-    return this.threat ? { ...this.threat } : null;
+  async check(): Promise<WeatherCheckResult> {
+    const threat = this.threat ? { ...this.threat } : null;
+    return {
+      threat,
+      summary: threat
+        ? `Test weather source: ${threat.title}. ${threat.description}`
+        : "Test weather source: no advisory required.",
+    };
   }
 }
 
@@ -41,17 +67,23 @@ export class MockWeatherSource implements WeatherSource {
 export class HttpWeatherSource implements WeatherSource {
   constructor(private readonly url: string) {}
 
-  async check(): Promise<WeatherThreat | null> {
+  async check(): Promise<WeatherCheckResult> {
     const res = await fetch(this.url);
-    if (res.status === 204) return null;
+    if (res.status === 204) {
+      return { threat: null, summary: "Weather source returned no advisory." };
+    }
     if (!res.ok) {
       throw new Error(`Weather endpoint ${this.url} returned ${res.status}`);
     }
     const text = await res.text();
-    if (!text.trim()) return null;
+    if (!text.trim()) {
+      return { threat: null, summary: "Weather source returned no advisory." };
+    }
     const data = JSON.parse(text) as Partial<WeatherThreat>;
-    if (!data.severity || !data.title) return null;
-    return {
+    if (!data.severity || !data.title) {
+      return { threat: null, summary: "Weather source returned no advisory." };
+    }
+    const threat: WeatherThreat = {
       severity: data.severity,
       title: data.title,
       description: data.description ?? "",
@@ -59,6 +91,7 @@ export class HttpWeatherSource implements WeatherSource {
       detectedAt: data.detectedAt ?? new Date().toISOString(),
       raw: data,
     };
+    return { threat, summary: `${threat.title}. ${threat.description}` };
   }
 }
 
@@ -67,6 +100,7 @@ export interface WeatherSourceOptions {
   latitude: number;
   longitude: number;
   locationName: string;
+  timezone?: string;
 }
 
 export function createWeatherSource(
@@ -75,10 +109,14 @@ export function createWeatherSource(
 ): WeatherSource {
   switch (kind) {
     case "open-meteo":
+      if (opts.latitude === undefined || opts.longitude === undefined) {
+        throw new Error("Open-Meteo weather checks require location coordinates");
+      }
       return new OpenMeteoWeatherSource(
         opts.latitude,
         opts.longitude,
         opts.locationName,
+        opts.timezone,
       );
     case "http":
       if (!opts.httpUrl) {

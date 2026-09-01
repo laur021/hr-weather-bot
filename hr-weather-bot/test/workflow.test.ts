@@ -4,12 +4,18 @@ import type { EventStore } from "../src/store/store.js";
 import type {
   Keyboard,
   Messenger,
+  PagasaVerification,
   SendResult,
   TelegramUser,
   WeatherEvent,
   WeatherThreat,
 } from "../src/types.js";
-import { WeatherWorkflow } from "../src/workflow.js";
+import {
+  formatHrWeatherAlert,
+  formatHrWeatherUpdate,
+  WeatherWorkflow,
+} from "../src/workflow.js";
+import { kmhToMs } from "../src/weather/classify.js";
 
 const HR = 5368977850;
 const EMP = 5324314507;
@@ -44,6 +50,18 @@ class FakeAi implements AiProvider {
   }
   async reviseDraft(current: string, instruction: string): Promise<string> {
     return `${current} [revised: ${instruction}]`;
+  }
+  async validateLocation(input: string) {
+    return { isLegitimate: true, normalizedLocation: input };
+  }
+  async searchWeather(location: string) {
+    return {
+      location,
+      condition: "Unavailable",
+      rainChancePercent: 0,
+      expectedRainfallMm: 0,
+      peakWindGustKmh: 0,
+    };
   }
 }
 
@@ -82,6 +100,27 @@ function makeThreat(overrides: Partial<WeatherThreat> = {}): WeatherThreat {
   };
 }
 
+function makeOfficial(
+  overrides: Partial<PagasaVerification> = {},
+): PagasaVerification {
+  return {
+    officialVerificationStatus: "VERIFIED",
+    sourceUrl: "https://www.pagasa.dost.gov.ph/tropical-cyclone/severe-weather-bulletin",
+    checkedAt: "2026-09-01T03:00:00.000Z",
+    bulletinId: "auring-TCB-1",
+    bulletinNumber: "1",
+    bulletinVersion: "1",
+    bulletinHash: "hash-1",
+    cycloneName: "AURING",
+    cycloneClassification: "Tropical Storm",
+    windSignals: ["Tropical Cyclone Wind Signal No. 1: Metro Manila"],
+    areasAffected: ["Metro Manila"],
+    officeAreaExplicitlyAffected: true,
+    directCycloneImpact: true,
+    ...overrides,
+  };
+}
+
 async function detectEvent(workflow: WeatherWorkflow) {
   await workflow.onWeatherDetected(makeThreat());
   const store = (workflow as unknown as { store: FakeStore }).store;
@@ -111,6 +150,61 @@ describe("WeatherWorkflow", () => {
     expect(ctx.messenger.employees).toHaveLength(0);
     const active = await ctx.store.latestActive();
     expect(active?.status).toBe("DETECTED");
+  });
+
+  it("keeps weather events separate when the same threat occurs in different locations", async () => {
+    const first = makeThreat({
+      hrAdvisory: {
+        location: "Taipei, Taiwan",
+        condition: "Thunderstorm",
+        rainChancePercent: 92,
+        expectedRainfallMm: 10,
+        peakWindGustMs: kmhToMs(38),
+      },
+    });
+    const second = makeThreat({
+      hrAdvisory: { ...first.hrAdvisory!, location: "Metro Manila" },
+    });
+
+    await ctx.workflow.onWeatherDetected(first);
+    await ctx.workflow.onWeatherDetected(second);
+
+    expect(await ctx.store.listActive()).toHaveLength(2);
+  });
+
+  it("formats a readable, action-oriented HR weather advisory", () => {
+    expect(
+      formatHrWeatherAlert(
+        makeThreat({
+          severity: "watch",
+          hrAdvisory: {
+            location: "Taipei, Taiwan",
+            condition: "Thunderstorm",
+            rainChancePercent: 92,
+            expectedRainfallMm: 10,
+            peakWindGustMs: kmhToMs(38),
+          },
+        }),
+      ),
+    ).toBe(
+      "🟡 <b>WATCH — Weather Watch</b>\n" +
+        "<b>Office:</b> Taipei, Taiwan\n" +
+        "<b>Local forecast:</b> A thunderstorm is expected today, with a 92% chance of rain, around 10 mm expected rainfall, and wind gusts reaching up to 38 km/h (10.56 m/s).\n" +
+        "<b>HR recommendation:</b> Please monitor weather and transport conditions closely throughout the day. Prepare a staff advisory if conditions worsen, particularly for employees travelling to or from the office. No work-suspension announcement is recommended at this time.\n" +
+        "Next update: as conditions change or in the next scheduled weather check.",
+    );
+  });
+
+  it("formats a location-specific clear-weather update using the same layout", () => {
+    expect(
+      formatHrWeatherUpdate("Metro Manila", {
+        location: "Metro Manila",
+        condition: "Overcast",
+        rainChancePercent: 20,
+        expectedRainfallMm: 1,
+        peakWindGustMs: kmhToMs(16),
+      }),
+    ).toContain("ℹ️ <b>INFO — Weather Update</b>");
   });
 
   it("returns compose actions with a detected advisory status", async () => {
@@ -193,6 +287,73 @@ describe("WeatherWorkflow", () => {
     expect(ctx.messenger.hr).toHaveLength(2);
     await ctx.workflow.onWeatherDetected(makeThreat());
     expect(ctx.messenger.hr).toHaveLength(2);
+  });
+
+  it("saves a newer bulletin hash without alerting again when risk is unchanged", async () => {
+    const advisory = {
+      location: "Metro Manila",
+      condition: "Thunderstorm",
+      rainChancePercent: 90,
+      expectedRainfallMm: 60,
+      peakWindGustMs: 10,
+    };
+    await ctx.workflow.onWeatherDetected(
+      makeThreat({ hrAdvisory: advisory, officialPagasa: makeOfficial() }),
+    );
+    const first = (await ctx.store.listActive())[0]!;
+    await ctx.workflow.onWeatherDetected(
+      makeThreat({
+        hrAdvisory: advisory,
+        officialPagasa: makeOfficial({
+          bulletinId: "auring-TCB-2",
+          bulletinNumber: "2",
+          bulletinVersion: "2",
+          bulletinHash: "hash-2",
+        }),
+      }),
+    );
+
+    expect(ctx.messenger.hr).toHaveLength(1);
+    expect(await ctx.store.listActive()).toHaveLength(1);
+    expect((await ctx.store.get(first.id))?.weather.officialPagasa?.bulletinHash).toBe(
+      "hash-2",
+    );
+  });
+
+  it("creates a controlled revision when official risk changes during draft review", async () => {
+    const advisory = {
+      location: "Metro Manila",
+      condition: "Thunderstorm",
+      rainChancePercent: 90,
+      expectedRainfallMm: 60,
+      peakWindGustMs: 10,
+    };
+    await ctx.workflow.onWeatherDetected(
+      makeThreat({ hrAdvisory: advisory, officialPagasa: makeOfficial() }),
+    );
+    const original = (await ctx.store.listActive())[0]!;
+    await ctx.workflow.compose(HR, original.id, ALICE);
+
+    await ctx.workflow.onWeatherDetected(
+      makeThreat({
+        severity: "warning",
+        title: "Severe Tropical Storm AURING — PAGASA-verified office impact",
+        hrAdvisory: advisory,
+        officialPagasa: makeOfficial({
+          bulletinId: "auring-TCB-2",
+          bulletinNumber: "2",
+          bulletinVersion: "2",
+          bulletinHash: "hash-2",
+          cycloneClassification: "Severe Tropical Storm",
+        }),
+      }),
+    );
+
+    const active = await ctx.store.listActive();
+    expect(active).toHaveLength(2);
+    expect(active.at(-1)?.revisionOfEventId).toBe(original.id);
+    expect(active.at(-1)?.status).toBe("DETECTED");
+    expect((await ctx.store.get(original.id))?.status).toBe("WAITING_FOR_APPROVAL");
   });
 
   it("stops same-or-lower severity alerts but permits escalation", async () => {

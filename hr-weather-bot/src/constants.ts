@@ -13,6 +13,7 @@ export const EMPLOYEE_CHAT_ID = -5324314507;
 /** Callback data prefixes. Parsed as `action:eventId[:extra]`. */
 export const CB = {
   compose: "compose",
+  createAnnouncement: "create-announcement",
   send: "send",
   edit: "edit",
   discard: "discard",
@@ -22,3 +23,8 @@ export const CB = {
 } as const;
 
 export type CallbackAction = (typeof CB)[keyof typeof CB];
+
+export const WEATHER_LOCATION_CB = {
+  default: "weather-location:default",
+  custom: "weather-location:custom",
+} as const;

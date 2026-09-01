@@ -35,7 +35,7 @@ Node.js 20+ (or Docker), next to or completely separate from OpenClaw.
    - `EMPLOYEE_CHAT_ID=<employee group id>` (a **negative** number)
    - `DEEPSEEK_API_KEY=<key>`
    - `WEATHER_SOURCE=open-meteo`
-   - `OPEN_METEO_LATITUDE` / `OPEN_METEO_LONGITUDE` / `OPEN_METEO_LOCATION_NAME` = office location
+   - `OFFICE_NAME`, `OFFICE_ADDRESS`, `OFFICE_LATITUDE`, `OFFICE_LONGITUDE`, `OFFICE_TIMEZONE`, and `OFFICE_LOCALITY_MATCHES` = the one office configuration
 
 6. **Discover the group IDs** (if you don't know them):
    ```bash
@@ -76,8 +76,9 @@ Scaling Group.
      uses DeepSeek only)
 3. Optionally add these Environment variables to override the defaults:
    `AI_PROVIDER`, `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `WEATHER_SOURCE`,
-   `OPEN_METEO_LATITUDE`, `OPEN_METEO_LONGITUDE`,
-   `OPEN_METEO_LOCATION_NAME`, `WEATHER_POLL_INTERVAL_MS`, and `LOG_LEVEL`.
+    `OFFICE_NAME`, `OFFICE_ADDRESS`, `OFFICE_LATITUDE`, `OFFICE_LONGITUDE`,
+    `OFFICE_TIMEZONE`, `OFFICE_LOCALITY_MATCHES`, `WEATHER_POLL_INTERVAL_MS`,
+    and `LOG_LEVEL`.
 4. Ensure Docker and the GitHub Actions self-hosted runner are configured to
    start automatically on the EC2 Windows machine.
 
@@ -111,7 +112,7 @@ already in the `hr-weather-bot/` folder (read its README.md and DEPLOY.md).
    - TELEGRAM_BOT_TOKEN=<new token>
    - DEEPSEEK_API_KEY=<our DeepSeek key>
    - WEATHER_SOURCE=open-meteo
-   - OPEN_METEO_LATITUDE / LONGITUDE / LOCATION_NAME = <office location>
+    - OFFICE_NAME / ADDRESS / LATITUDE / LONGITUDE / TIMEZONE / LOCALITY_MATCHES = <office location>
 5. Discover group chat IDs: run `npm install && npm run discover`, then have someone
    send "@<bot> ping" in each group, and read the printed negative chat_id values.
 6. Set AUTHORIZED_HR_CHAT_ID and EMPLOYEE_CHAT_ID in .env to those values.

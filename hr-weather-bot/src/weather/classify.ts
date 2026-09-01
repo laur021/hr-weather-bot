@@ -4,12 +4,12 @@ const SEV_ORDER: Record<Severity, number> = { watch: 1, warning: 2, emergency: 3
 
 /**
  * Severity thresholds, roughly aligned with PAGASA tropical-cyclone wind
- * signals and rainfall warning colors.
+ * signals and rainfall warning colors. Wind values are always m/s internally.
  */
-function windSeverity(gustKmh: number): Severity | null {
-  if (gustKmh >= 118) return "emergency"; // typhoon-force
-  if (gustKmh >= 62) return "warning"; // storm/gale-force
-  if (gustKmh >= 30) return "watch"; // strong breeze
+function windSeverity(gustMs: number): Severity | null {
+  if (gustMs >= 32.78) return "emergency"; // 118 km/h
+  if (gustMs >= 24.44) return "warning"; // 88 km/h
+  if (gustMs >= WIND_GUST_ALERT_THRESHOLD_MS) return "watch"; // 72 km/h
   return null;
 }
 
@@ -27,14 +27,14 @@ function pick(a: Severity | null, b: Severity | null): Severity | null {
 }
 
 export interface ThreatInput {
-  windKmh: number;
-  gustKmh: number;
+  windMs: number;
+  gustMs: number;
   precipitationMm: number;
   location: string;
 }
 
 export function classifyThreat(input: ThreatInput): WeatherThreat | null {
-  const gust = Math.max(input.windKmh, input.gustKmh);
+  const gust = Math.max(input.windMs, input.gustMs);
   const wSev = windSeverity(gust);
   const rSev = rainSeverity(input.precipitationMm);
   const severity = pick(wSev, rSev);
@@ -46,7 +46,9 @@ export function classifyThreat(input: ThreatInput): WeatherThreat | null {
     : `${SEV_LABEL[severity]} — heavy rainfall`;
 
   const parts: string[] = [];
-  if (gust >= 30) parts.push(`peak wind gusts up to ${Math.round(gust)} km/h`);
+  if (gust >= WIND_GUST_ALERT_THRESHOLD_MS) {
+    parts.push(`peak wind gusts up to ${Math.round(msToKmh(gust))} km/h (${round(gust)} m/s)`);
+  }
   if (input.precipitationMm >= 30) {
     parts.push(`up to ${Math.round(input.precipitationMm)} mm of rain`);
   }
@@ -69,6 +71,20 @@ export function classifyThreat(input: ThreatInput): WeatherThreat | null {
     detectedAt: new Date().toISOString(),
     raw: input,
   };
+}
+
+export const WIND_GUST_ALERT_THRESHOLD_MS = 20;
+
+export function kmhToMs(kmh: number): number {
+  return kmh / 3.6;
+}
+
+export function msToKmh(ms: number): number {
+  return ms * 3.6;
+}
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 const SEV_LABEL: Record<Severity, string> = {

@@ -58,24 +58,28 @@ needs its own bot token, group IDs, and location.
 | Var | Default | Notes |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — | **required**, from @BotFather |
-| `AUTHORIZED_HR_CHAT_ID` | `5368977850` | HR Weather Drafts |
-| `EMPLOYEE_CHAT_ID` | `5324314507` | ABC Employee Announcement |
+| `AUTHORIZED_HR_CHAT_ID` | `-5368977850` | HR Weather Drafts; Telegram group IDs are negative |
+| `EMPLOYEE_CHAT_ID` | `-5324314507` | Output-only employee group |
 | `AI_PROVIDER` | `deepseek` | `deepseek` or `mock` (no key needed) |
 | `DEEPSEEK_API_KEY` | — | required when `AI_PROVIDER=deepseek` |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | any OpenAI-compatible model |
+| `DEEPSEEK_MODEL` | `deepseek-v4-flash` | DeepSeek model with Responses API web-search support |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/chat/completions` | override for any compatible endpoint |
-| `WEATHER_SOURCE` | `open-meteo` | `open-meteo` (free, no key), `mock`, `http`, or `noop` |
-| `OPEN_METEO_LATITUDE` | `14.5995` | latitude (defaults to Manila) |
-| `OPEN_METEO_LONGITUDE` | `120.9842` | longitude |
-| `OPEN_METEO_LOCATION_NAME` | `Metro Manila` | label used in alerts |
-| `WEATHER_HTTP_URL` | — | for `http`: returns `{severity,title,description}` |
-| `WEATHER_POLL_INTERVAL_MS` | `600000` | poll interval for `http` / `open-meteo` |
+| `DEEPSEEK_RESPONSES_BASE_URL` | `https://api.deepseek.com/responses` | Used only for legacy `WEATHER_SOURCE=ai-web` |
+| `WEATHER_SOURCE` | `open-meteo` | Local forecast source; Open-Meteo wind is requested in m/s |
+| `OFFICE_NAME` / `OFFICE_ADDRESS` | `Metro Manila` | One configured office identity used throughout advisories |
+| `OFFICE_LATITUDE` / `OFFICE_LONGITUDE` | `14.5995` / `120.9842` | Open-Meteo office coordinates |
+| `OFFICE_TIMEZONE` | `Asia/Manila` | Office forecast/display timezone |
+| `OFFICE_LOCALITY_MATCHES` | `NCR,National Capital Region,Metro Manila,Quezon City` | Explicit PAGASA locality matching aliases |
+| `PAGASA_*_URL` | official PAGASA pages | Direct Tropical Cyclone Bulletin, daily weather, and advisory sources |
+| `WEATHER_POLL_INTERVAL_MS` | `600000` | Open-Meteo + official PAGASA polling interval |
 | `DATA_DIR` | `./data` | JSON persistence location |
 
 ## Commands & buttons
 
-- `/status` — latest advisory (HR group only)
-- `/checkweather` — force a weather check (HR group only)
+- `/check_weather` — choose Metro Manila (default) or enter another location,
+  then check its current forecast (HR group only)
+- Custom locations are evaluated by the configured AI provider and confirmed
+  through Open-Meteo geocoding before any weather request is made.
 - `📝 Compose Draft` / `❌ Discard` — on the weather alert
 - `✅ Send to Employees` / `✏️ Edit` / `❌ Discard` — on the draft preview
 - After a successful send, HR can stop same-day alerts or continue monitoring. Continued monitoring only alerts HR when the threat type or severity changes; stopped monitoring still allows a higher-severity alert.

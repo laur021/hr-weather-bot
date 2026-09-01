@@ -1,5 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
-import type { Keyboard, Messenger, SendResult } from "../types.js";
+import type { Keyboard, MessageOptions, Messenger, SendResult } from "../types.js";
 
 export function toInlineKeyboard(kb: Keyboard): InlineKeyboard {
   const ik = new InlineKeyboard();
@@ -18,9 +18,14 @@ export class GrammYMessenger implements Messenger {
     private readonly employeeChatId: number,
   ) {}
 
-  async sendToHr(text: string, keyboard?: Keyboard): Promise<void> {
+  async sendToHr(
+    text: string,
+    keyboard?: Keyboard,
+    options?: MessageOptions,
+  ): Promise<void> {
     await this.bot.api.sendMessage(this.hrChatId, text, {
       reply_markup: keyboard ? toInlineKeyboard(keyboard) : undefined,
+      parse_mode: options?.parseMode,
     });
   }
 

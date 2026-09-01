@@ -1,39 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { classifyThreat } from "../src/weather/classify.js";
+import { classifyThreat, kmhToMs } from "../src/weather/classify.js";
 
 const LOC = "Test City";
 
 describe("classifyThreat", () => {
   it("returns null for calm conditions", () => {
     expect(
-      classifyThreat({ windKmh: 10, gustKmh: 20, precipitationMm: 5, location: LOC }),
+      classifyThreat({ windMs: 2, gustMs: 5, precipitationMm: 5, location: LOC }),
     ).toBeNull();
   });
 
-  it("classifies watch from moderate wind", () => {
-    const t = classifyThreat({ windKmh: 40, gustKmh: 45, precipitationMm: 10, location: LOC });
+  it("classifies watch at the canonical 20 m/s gust threshold", () => {
+    const t = classifyThreat({ windMs: 10, gustMs: 20, precipitationMm: 10, location: LOC });
     expect(t?.severity).toBe("watch");
   });
 
   it("classifies warning from storm-force wind", () => {
-    const t = classifyThreat({ windKmh: 70, gustKmh: 90, precipitationMm: 20, location: LOC });
+    const t = classifyThreat({ windMs: 20, gustMs: 25, precipitationMm: 20, location: LOC });
     expect(t?.severity).toBe("warning");
   });
 
   it("classifies emergency from typhoon-force wind", () => {
-    const t = classifyThreat({ windKmh: 130, gustKmh: 150, precipitationMm: 30, location: LOC });
+    const t = classifyThreat({ windMs: 30, gustMs: 33, precipitationMm: 30, location: LOC });
     expect(t?.severity).toBe("emergency");
   });
 
   it("classifies from heavy rainfall", () => {
-    const t = classifyThreat({ windKmh: 15, gustKmh: 25, precipitationMm: 120, location: LOC });
+    const t = classifyThreat({ windMs: 4, gustMs: 7, precipitationMm: 120, location: LOC });
     expect(t?.severity).toBe("warning");
     expect(t?.title.toLowerCase()).toContain("rain");
   });
 
   it("picks the higher severity across wind and rain", () => {
     // wind -> warning, rain -> emergency => emergency
-    const t = classifyThreat({ windKmh: 70, gustKmh: 80, precipitationMm: 250, location: LOC });
+    const t = classifyThreat({ windMs: 20, gustMs: 22, precipitationMm: 250, location: LOC });
     expect(t?.severity).toBe("emergency");
+  });
+
+  it("converts km/h to m/s and does not alert for a 38 km/h gust", () => {
+    expect(kmhToMs(38)).toBeCloseTo(10.56, 2);
+    expect(
+      classifyThreat({
+        windMs: 0,
+        gustMs: kmhToMs(38),
+        precipitationMm: 0,
+        location: LOC,
+      }),
+    ).toBeNull();
   });
 });

@@ -1,14 +1,24 @@
 import { Bot } from "grammy";
 import path from "node:path";
-import type { AiProvider } from "./ai/prompts.js";
+import type { AiProvider, WebWeatherResult } from "./ai/prompts.js";
 import { DeepSeekProvider, MockAiProvider } from "./ai/provider.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { JsonFileStore } from "./store/json-store.js";
 import { registerHandlers } from "./telegram/bot.js";
 import { GrammYMessenger } from "./telegram/messenger.js";
-import type { WeatherThreat } from "./types.js";
-import { createWeatherSource, type WeatherSource } from "./weather/index.js";
+import {
+  createWeatherSource,
+  type WeatherCheckResult,
+  type WeatherLocation,
+} from "./weather/index.js";
+import { classifyThreat, kmhToMs } from "./weather/classify.js";
+import {
+  isPhilippineLocation,
+  pagasaOfficeFor,
+  resolveOpenMeteoLocation,
+} from "./weather/geocoding.js";
+import { enrichWithPagasa, PagasaClient } from "./weather/pagasa.js";
 import { WeatherWorkflow } from "./workflow.js";
 
 async function main(): Promise<void> {
@@ -21,20 +31,18 @@ async function main(): Promise<void> {
   const ai: AiProvider =
     config.aiProvider === "mock"
       ? new MockAiProvider()
-      : new DeepSeekProvider(config.deepseekApiKey, config.deepseekModel, config.deepseekBaseUrl);
+      : new DeepSeekProvider(
+          config.deepseekApiKey,
+          config.deepseekModel,
+          config.deepseekBaseUrl,
+          config.deepseekResponsesBaseUrl,
+        );
 
   if (config.aiProvider === "deepseek" && !config.deepseekApiKey) {
     log.warn(
       "AI_PROVIDER=deepseek but DEEPSEEK_API_KEY is unset — draft generation will fail. Set the key or use AI_PROVIDER=mock."
     );
   }
-
-  const weather: WeatherSource = createWeatherSource(config.weatherSource, {
-    httpUrl: config.weatherHttpUrl,
-    latitude: config.openMeteoLatitude,
-    longitude: config.openMeteoLongitude,
-    locationName: config.openMeteoLocationName,
-  });
 
   const bot = new Bot(config.telegramBotToken);
 
@@ -75,18 +83,61 @@ async function main(): Promise<void> {
     config.authorizedHrChatId,
     config.employeeChatId
   );
+  const pagasa = new PagasaClient({
+    bulletinUrl: config.pagasaBulletinUrl,
+    dailyWeatherUrl: config.pagasaDailyWeatherUrl,
+    weatherAdvisoryUrl: config.pagasaWeatherAdvisoryUrl,
+    office: config.officeLocation,
+  });
 
-  // Weather check: poll on an interval + manual trigger via /checkweather.
+  // Weather check: poll on an interval + manual trigger via /check_weather.
   let checking = false;
-  const checkOnce = async (): Promise<WeatherThreat | null> => {
+  const checkOnce = async (
+    location?: WeatherLocation,
+  ): Promise<WeatherCheckResult | null> => {
     if (checking) return null;
     checking = true;
     try {
-      const threat = await weather.check();
-      if (threat) {
-        await workflow.onWeatherDetected(threat);
+      const isOfficeCheck = location === undefined;
+      const target = location ?? {
+        name: config.officeLocation.name,
+        latitude: config.officeLocation.latitude,
+        longitude: config.officeLocation.longitude,
+        timezone: config.officeLocation.timezone,
+      };
+      let result: WeatherCheckResult;
+      if (config.weatherSource === "ai-web" && isOfficeCheck) {
+        result = weatherSearchResult(await ai.searchWeather(target.name));
+      } else {
+        const sourceKind = location ? "open-meteo" : config.weatherSource;
+        result = await createWeatherSource(
+          sourceKind === "ai-web" ? "open-meteo" : sourceKind,
+          {
+            httpUrl: config.weatherHttpUrl,
+            latitude: target.latitude ?? config.officeLocation.latitude,
+            longitude: target.longitude ?? config.officeLocation.longitude,
+            locationName: target.name,
+            timezone: target.timezone ?? config.officeLocation.timezone,
+          },
+        ).check();
       }
-      return threat;
+      if (isOfficeCheck || isPhilippineLocation(target)) {
+        const pagasaOffice = isOfficeCheck ? config.officeLocation : pagasaOfficeFor(target);
+        const pagasaClient = isOfficeCheck
+          ? pagasa
+          : new PagasaClient({
+              bulletinUrl: config.pagasaBulletinUrl,
+              dailyWeatherUrl: config.pagasaDailyWeatherUrl,
+              weatherAdvisoryUrl: config.pagasaWeatherAdvisoryUrl,
+              office: pagasaOffice,
+            });
+        result = enrichWithPagasa(result, await pagasaClient.check(), pagasaOffice);
+      }
+      let eventId: string | undefined;
+      if (result.threat) {
+        eventId = (await workflow.onWeatherDetected(result.threat))?.id;
+      }
+      return { ...result, eventId };
     } finally {
       checking = false;
     }
@@ -106,14 +157,18 @@ async function main(): Promise<void> {
     employeeChatId: config.employeeChatId,
     log,
     checkWeatherNow: checkOnce,
+    defaultWeatherLocationName: config.officeLocation.name,
+    // Geocoding is the authoritative validation step for a custom location.
+    // Do not make a valid place depend on an AI classification before resolving it.
+    resolveWeatherLocation: (input) => resolveOpenMeteoLocation(input.trim()),
   });
 
   // Register the Telegram command menu so clients can autocomplete commands.
   try {
     await bot.api.setMyCommands([
       { command: "start", description: "Show bot help" },
-      { command: "check-weather", description: "Check weather now (HR group)" },
-      { command: "create-announcement", description: "Create a manual employee announcement" },
+      { command: "check_weather", description: "Choose a location and check weather" },
+      { command: "create_announcement", description: "Create a manual employee announcement" },
     ]);
   } catch (err) {
     // The bot remains usable even if Telegram cannot update the command menu.
@@ -122,10 +177,10 @@ async function main(): Promise<void> {
 
   // Initial + periodic check.
   await checkSafely();
-  if (config.weatherSource === "http" || config.weatherSource === "open-meteo") {
-    setInterval(() => void checkSafely(), config.weatherPollIntervalMs);
-    log.info(`Weather polling every ${config.weatherPollIntervalMs}ms`);
-  }
+  setInterval(() => void checkSafely(), config.weatherPollIntervalMs);
+  log.info(
+    `Open-Meteo + official PAGASA weather check for ${config.officeLocation.name} every ${config.weatherPollIntervalMs}ms`,
+  );
 
   async function startResilient(): Promise<void> {
     for (;;) {
@@ -156,3 +211,29 @@ main().catch((err) => {
   console.error("Fatal:", err);
   process.exit(1);
 });
+
+function weatherSearchResult(search: WebWeatherResult): WeatherCheckResult {
+  const advisory = {
+    location: search.location,
+    condition: search.condition,
+    rainChancePercent: search.rainChancePercent,
+    expectedRainfallMm: search.expectedRainfallMm,
+    peakWindGustMs: kmhToMs(search.peakWindGustKmh),
+  };
+  const threat = classifyThreat({
+    windMs: 0,
+    gustMs: kmhToMs(search.peakWindGustKmh),
+    precipitationMm: search.expectedRainfallMm,
+    location: search.location,
+  });
+  if (threat) {
+    threat.source = "deepseek-web-search";
+    threat.hrAdvisory = advisory;
+    threat.raw = search;
+  }
+  return {
+    threat,
+    advisory,
+    summary: `DeepSeek web weather search for ${search.location}: ${search.condition}.`,
+  };
+}
