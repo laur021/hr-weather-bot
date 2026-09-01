@@ -8,6 +8,7 @@ export type EventStatus =
   | "DISCARDED";
 
 export type Severity = "watch" | "warning" | "emergency";
+export type AnnouncementKind = "weather" | "manual";
 
 /** HR's choice for alerts after an employee advisory has been sent. */
 export type MonitoringMode = "PENDING" | "CONTINUING" | "STOPPED";
@@ -48,6 +49,8 @@ export interface DailyMonitoringDecision {
 
 export interface WeatherEvent {
   id: string;
+  /** Omitted on legacy stored events, which are treated as weather advisories. */
+  kind?: AnnouncementKind;
   status: EventStatus;
   createdAt: string;
   updatedAt: string;

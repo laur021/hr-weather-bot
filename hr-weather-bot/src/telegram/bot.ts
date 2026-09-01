@@ -37,6 +37,7 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
   const { workflow, hrChatId, employeeChatId, log } = deps;
   // Associate an Edit request with one HR user to avoid cross-user overwrites.
   const pendingManualDrafts = new Map<string, string>();
+  const pendingManualAnnouncements = new Set<string>();
   const pendingKey = (chatId: number, userId: number | undefined): string =>
     `${chatId}:${userId ?? 0}`;
 
@@ -70,6 +71,17 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
       log.error("Manual weather check failed", err);
       await ctx.reply("⚠️ Weather check failed. Please try again shortly.");
     }
+  });
+
+  bot.command("createannouncement", async (ctx) => {
+    if (!isHrChat(ctx.chat?.id, hrChatId)) {
+      await ctx.reply("This command is available only in the HR Weather Drafts group.");
+      return;
+    }
+    pendingManualAnnouncements.add(pendingKey(ctx.chat.id, ctx.from?.id));
+    await ctx.reply(
+      "Send the complete employee announcement as your next message. I will show it for confirmation before anything is sent.",
+    );
   });
 
   bot.on("callback_query:data", async (ctx) => {
@@ -142,6 +154,15 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
 
     if (isHrChat(chatId, hrChatId)) {
       const key = pendingKey(chatId!, ctx.from?.id);
+      if (pendingManualAnnouncements.has(key)) {
+        try {
+          await workflow.createManualAnnouncement(chatId, text, toUser(ctx.from));
+          pendingManualAnnouncements.delete(key);
+        } catch (err) {
+          await handleWorkflowError(ctx, err as WorkflowError, workflow, undefined);
+        }
+        return;
+      }
       const eventId = pendingManualDrafts.get(key);
       if (eventId) {
         try {

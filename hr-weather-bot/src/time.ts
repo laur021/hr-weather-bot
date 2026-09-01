@@ -27,10 +27,10 @@ export function manilaDay(iso = nowIso()): string {
 }
 
 /** `weather_YYYYMMDD_NNN` — readable, spec-style event id. */
-export function makeEventId(iso: string, seq: number): string {
+export function makeEventId(iso: string, seq: number, prefix = "weather"): string {
   const d = new Date(iso);
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
-  return `weather_${y}${m}${day}_${String(seq).padStart(3, "0")}`;
+  return `${prefix}_${y}${m}${day}_${String(seq).padStart(3, "0")}`;
 }

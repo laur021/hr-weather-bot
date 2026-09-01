@@ -126,6 +126,25 @@ describe("WeatherWorkflow", () => {
     ]);
   });
 
+  it("requires confirmation before sending a manual announcement", async () => {
+    await ctx.workflow.createManualAnnouncement(
+      HR,
+      "The office will close at 3 PM today.",
+      ALICE,
+    );
+
+    const event = (await ctx.store.listActive())[0]!;
+    expect(event.kind).toBe("manual");
+    expect(event.status).toBe("WAITING_FOR_APPROVAL");
+    expect(event.draft?.text).toBe("The office will close at 3 PM today.");
+    expect(ctx.messenger.employees).toHaveLength(0);
+
+    await ctx.workflow.send(HR, event.id, 1, ALICE);
+
+    expect(ctx.messenger.employees).toEqual(["The office will close at 3 PM today."]);
+    expect((await ctx.store.get(event.id))?.monitoring).toBeUndefined();
+  });
+
   it("rejects privileged actions from non-HR chat", async () => {
     const event = await detectEvent(ctx.workflow);
     await expect(ctx.workflow.compose(EMP, event.id, ALICE)).rejects.toThrow(

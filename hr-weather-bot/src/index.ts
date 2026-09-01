@@ -116,6 +116,19 @@ async function main(): Promise<void> {
     checkWeatherNow: checkOnce,
   });
 
+  // Register the Telegram command menu so clients can autocomplete commands.
+  try {
+    await bot.api.setMyCommands([
+      { command: "start", description: "Show bot help" },
+      { command: "status", description: "Show the latest weather advisory" },
+      { command: "checkweather", description: "Check weather now (HR group)" },
+      { command: "createannouncement", description: "Create a manual employee announcement" },
+    ]);
+  } catch (err) {
+    // The bot remains usable even if Telegram cannot update the command menu.
+    log.warn("Failed to register Telegram command menu", err);
+  }
+
   // Initial + periodic check.
   await checkSafely();
   if (config.weatherSource === "http" || config.weatherSource === "open-meteo") {

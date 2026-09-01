@@ -82,6 +82,51 @@ export class WeatherWorkflow {
     await this.notifyHrAlert(event);
   }
 
+  /** Create an HR-authored announcement that still requires explicit approval. */
+  async createManualAnnouncement(
+    chatId: number | null | undefined,
+    text: string,
+    user: TelegramUser,
+  ): Promise<void> {
+    assertHrChat(chatId, this.hrChatId);
+    const announcement = text.trim();
+    if (!announcement) {
+      throw new WorkflowError("INVALID_STATE", "The announcement cannot be empty.");
+    }
+
+    const createdAt = nowIso();
+    const draft = {
+      version: 1,
+      text: announcement,
+      editedByTelegramUserId: user.id,
+      editedByTelegramUsername: user.username,
+      editedByDisplayName: user.displayName,
+      editedAt: createdAt,
+    };
+    const event: WeatherEvent = {
+      id: makeEventId(createdAt, await this.nextSeq(), "announcement"),
+      kind: "manual",
+      status: "WAITING_FOR_APPROVAL",
+      createdAt,
+      updatedAt: createdAt,
+      // This placeholder is never used for weather monitoring or alerts.
+      weather: {
+        severity: "watch",
+        title: "Manual announcement",
+        description: "",
+        source: "manual",
+        detectedAt: createdAt,
+      },
+      draft,
+      draftHistory: [draft],
+      createdByTelegramUserId: user.id,
+      createdByTelegramUsername: user.username,
+      createdByDisplayName: user.displayName,
+    };
+    await this.store.upsert(event);
+    await this.sendDraftPreview(event);
+  }
+
   // ---------------------------------------------------------------------
   // HR actions
   // ---------------------------------------------------------------------
@@ -313,7 +358,7 @@ export class WeatherWorkflow {
   }
 
   async latestStatus(): Promise<string> {
-    const event = await this.store.latestActive();
+    const event = await this.latestWeatherActive();
     if (!event) {
       return "🌤️ No active weather advisories.";
     }
@@ -336,7 +381,7 @@ export class WeatherWorkflow {
 
   /** Latest advisory text plus the actions that are valid for its current state. */
   async latestStatusWithActions(): Promise<{ text: string; keyboard?: Keyboard }> {
-    const event = await this.store.latestActive();
+    const event = await this.latestWeatherActive();
     if (!event) return { text: await this.latestStatus() };
 
     const keyboard =
@@ -416,12 +461,29 @@ export class WeatherWorkflow {
         sentAt: nowIso(),
         sentMessageId: result.messageId,
         sendError: undefined,
-        monitoring: {
-          day: manilaDay(),
-          mode: "PENDING",
-        },
+        monitoring:
+          event.kind === "manual"
+            ? undefined
+            : {
+                day: manilaDay(),
+                mode: "PENDING",
+              },
       };
       await this.store.upsert(sent);
+      if (event.kind === "manual") {
+        await this.messenger.sendToHr(
+          [
+            "Manual announcement sent",
+            "",
+            "The approved announcement was sent to the employee group.",
+            "",
+            `Event: ${event.id} (draft v${draft.version})`,
+            `Sent by: ${event.approvedByDisplayName ?? event.approvedByTelegramUsername ?? "HR"}`,
+            `Time: ${formatManila(nowIso())}`,
+          ].join("\n"),
+        );
+        return;
+      }
       await this.messenger.sendToHr(
         [
           `✅ Announcement Sent`,
@@ -527,8 +589,16 @@ export class WeatherWorkflow {
   private async findEventFor(threat: WeatherThreat): Promise<WeatherEvent | undefined> {
     const active = await this.store.listActive();
     return active.find(
-      (e) => e.weather.title === threat.title && e.weather.severity === threat.severity,
+      (e) =>
+        e.kind !== "manual" &&
+        e.weather.title === threat.title &&
+        e.weather.severity === threat.severity,
     );
+  }
+
+  private async latestWeatherActive(): Promise<WeatherEvent | undefined> {
+    const active = await this.store.listActive();
+    return active.filter((event) => event.kind !== "manual").at(-1);
   }
 
   private async latestMonitoringForToday(): Promise<WeatherEvent | undefined> {
@@ -536,6 +606,7 @@ export class WeatherWorkflow {
     const events = await this.store.list();
     return events.find(
       (event) =>
+        event.kind !== "manual" &&
         event.status === "SENT" &&
         event.monitoring?.day === today &&
         Boolean(event.sentAt),
