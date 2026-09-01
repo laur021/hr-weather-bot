@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "description": "HR Weather Advisory System — Telegram bot with group-based authorization, draft workflow, and DeepSeek draft generation.",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "dist/openclaw-runner.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/openclaw-runner.ts",
     "start": "tsx src/index.ts",
+    "openclaw:runner": "npm run build --silent && node dist/openclaw-runner.js",
     "discover": "tsx scripts/discover.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",

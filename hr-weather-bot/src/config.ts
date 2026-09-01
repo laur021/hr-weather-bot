@@ -2,7 +2,9 @@ import { config as loadEnv } from "dotenv";
 import { AUTHORIZED_HR_CHAT_ID, EMPLOYEE_CHAT_ID } from "./constants.js";
 import type { OfficeLocation } from "./types.js";
 
-loadEnv();
+// The legacy standalone runner reads `.env`. OpenClaw supplies the same values
+// through its resolved secret references and must never fall back to this file.
+if (process.env.HR_WEATHER_SKIP_DOTENV !== "1") loadEnv();
 
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -48,6 +50,7 @@ export interface AppConfig {
   pagasaWeatherAdvisoryUrl: string;
   dataDir: string;
   logLevel: string;
+  opsChatId: number;
 }
 
 export function loadConfig(): AppConfig {
@@ -113,5 +116,6 @@ export function loadConfig(): AppConfig {
     ),
     dataDir: strEnv("DATA_DIR", "./data"),
     logLevel: strEnv("LOG_LEVEL", "info"),
+    opsChatId: intEnv("OPS_CHAT_ID", 0),
   };
 }

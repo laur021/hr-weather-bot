@@ -3,4 +3,5 @@ dist/
 .env
 *.log
 data/*.json
+data/*.sqlite
 !data/.gitkeep

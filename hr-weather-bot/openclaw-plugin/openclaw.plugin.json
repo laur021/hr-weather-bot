@@ -1,0 +1,179 @@
+{
+  "id": "hr-weather",
+  "name": "HR Weather Advisory",
+  "description": "Guarded PAGASA-first HR weather advisory workflow.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "required": [
+      "projectDir",
+      "dataDir",
+      "telegramBotToken",
+      "deepseekApiKey",
+      "authorizedHrChatId",
+      "employeeChatId",
+      "opsChatId",
+      "officeName",
+      "officeAddress",
+      "officeLatitude",
+      "officeLongitude",
+      "officeTimezone",
+      "officeLocalityMatches"
+    ],
+    "properties": {
+      "projectDir": {
+        "type": "string"
+      },
+      "dataDir": {
+        "type": "string"
+      },
+      "telegramBotToken": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "env"
+                  },
+                  {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  {
+                    "type": "string",
+                    "const": "exec"
+                  },
+                  {
+                    "type": "string",
+                    "const": "store"
+                  }
+                ]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "deepseekApiKey": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "source",
+              "provider",
+              "id"
+            ],
+            "properties": {
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "env"
+                  },
+                  {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  {
+                    "type": "string",
+                    "const": "exec"
+                  },
+                  {
+                    "type": "string",
+                    "const": "store"
+                  }
+                ]
+              },
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "authorizedHrChatId": {
+        "type": "integer"
+      },
+      "employeeChatId": {
+        "type": "integer"
+      },
+      "opsChatId": {
+        "type": "integer"
+      },
+      "officeName": {
+        "type": "string"
+      },
+      "officeAddress": {
+        "type": "string"
+      },
+      "officeLatitude": {
+        "type": "number"
+      },
+      "officeLongitude": {
+        "type": "number"
+      },
+      "officeTimezone": {
+        "type": "string"
+      },
+      "officeLocalityMatches": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "telegramBotToken",
+          "expected": "string",
+          "ownerKind": "capability"
+        },
+        {
+          "path": "deepseekApiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "contracts": {
+    "tools": [
+      "hr_weather_workflow"
+    ]
+  },
+  "toolMetadata": {
+    "hr_weather_workflow": {
+      "profiles": [
+        "coding"
+      ]
+    }
+  }
+}
