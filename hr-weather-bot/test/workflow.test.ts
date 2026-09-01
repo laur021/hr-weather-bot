@@ -113,6 +113,19 @@ describe("WeatherWorkflow", () => {
     expect(active?.status).toBe("DETECTED");
   });
 
+  it("returns compose actions with a detected advisory status", async () => {
+    const event = await detectEvent(ctx.workflow);
+    const status = await ctx.workflow.latestStatusWithActions();
+
+    expect(status.text).toContain(event.id);
+    expect(status.keyboard).toEqual([
+      [
+        { text: "📝 Compose Draft", data: `compose:${event.id}` },
+        { text: "❌ Discard", data: `discard:${event.id}` },
+      ],
+    ]);
+  });
+
   it("rejects privileged actions from non-HR chat", async () => {
     const event = await detectEvent(ctx.workflow);
     await expect(ctx.workflow.compose(EMP, event.id, ALICE)).rejects.toThrow(

@@ -55,7 +55,7 @@ jobs:
           AUTHORIZED_HR_CHAT_ID: ${{ secrets.AUTHORIZED_HR_CHAT_ID }}
           EMPLOYEE_CHAT_ID: ${{ secrets.EMPLOYEE_CHAT_ID }}
           AI_PROVIDER: ${{ vars.AI_PROVIDER || 'deepseek' }}
-          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-chat' }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-v4-flash' }}
           DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/chat/completions' }}
           WEATHER_SOURCE: ${{ vars.WEATHER_SOURCE || 'open-meteo' }}
           OPEN_METEO_LATITUDE: ${{ vars.OPEN_METEO_LATITUDE || '14.5995' }}

@@ -95,10 +95,16 @@ async function main(): Promise<void> {
       if (threat) {
         await workflow.onWeatherDetected(threat);
       }
-    } catch (err) {
-      log.error("Weather check failed", err);
     } finally {
       checking = false;
+    }
+  };
+
+  const checkSafely = async (): Promise<void> => {
+    try {
+      await checkOnce();
+    } catch (err) {
+      log.error("Weather check failed", err);
     }
   };
 
@@ -111,9 +117,9 @@ async function main(): Promise<void> {
   });
 
   // Initial + periodic check.
-  await checkOnce();
+  await checkSafely();
   if (config.weatherSource === "http" || config.weatherSource === "open-meteo") {
-    setInterval(checkOnce, config.weatherPollIntervalMs);
+    setInterval(() => void checkSafely(), config.weatherPollIntervalMs);
     log.info(`Weather polling every ${config.weatherPollIntervalMs}ms`);
   }
 

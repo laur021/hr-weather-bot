@@ -3,6 +3,7 @@ import { isEmployeeChat, isHrChat } from "../auth.js";
 import { CB } from "../constants.js";
 import type { Logger } from "../logger.js";
 import { decodeCallback } from "./callback.js";
+import { toInlineKeyboard } from "./messenger.js";
 import type { WeatherWorkflow, WorkflowError } from "../workflow.js";
 import type { TelegramUser } from "../types.js";
 
@@ -59,7 +60,16 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
       return;
     }
     await ctx.reply("🔎 Checking weather…");
-    await deps.checkWeatherNow();
+    try {
+      await deps.checkWeatherNow();
+      const status = await workflow.latestStatusWithActions();
+      await ctx.reply(`✅ Weather check complete.\n\n${status.text}`, {
+        reply_markup: status.keyboard ? toInlineKeyboard(status.keyboard) : undefined,
+      });
+    } catch (err) {
+      log.error("Manual weather check failed", err);
+      await ctx.reply("⚠️ Weather check failed. Please try again shortly.");
+    }
   });
 
   bot.on("callback_query:data", async (ctx) => {

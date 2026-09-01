@@ -334,6 +334,23 @@ export class WeatherWorkflow {
     ].join("\n");
   }
 
+  /** Latest advisory text plus the actions that are valid for its current state. */
+  async latestStatusWithActions(): Promise<{ text: string; keyboard?: Keyboard }> {
+    const event = await this.store.latestActive();
+    if (!event) return { text: await this.latestStatus() };
+
+    const keyboard =
+      event.status === "DETECTED"
+        ? this.alertKeyboard(event.id)
+        : event.status === "WAITING_FOR_APPROVAL" && event.draft
+          ? this.draftKeyboard(event.id, event.draft.version)
+          : event.status === "SEND_FAILED" && event.draft
+            ? [[{ text: "🔁 Retry Send", data: encodeCallback(CB.send, event.id, event.draft.version) }]]
+            : undefined;
+
+    return { text: await this.latestStatus(), keyboard };
+  }
+
   /** Edit the latest active draft (for free-text HR instructions). */
   async editLatest(
     chatId: number | null | undefined,

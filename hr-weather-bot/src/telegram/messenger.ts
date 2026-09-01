@@ -1,7 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import type { Keyboard, Messenger, SendResult } from "../types.js";
 
-function toInlineKeyboard(kb: Keyboard): InlineKeyboard {
+export function toInlineKeyboard(kb: Keyboard): InlineKeyboard {
   const ik = new InlineKeyboard();
   kb.forEach((row, i) => {
     for (const b of row) ik.text(b.text, b.data);
