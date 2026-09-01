@@ -5,7 +5,7 @@ import type { Logger } from "../logger.js";
 import { decodeCallback } from "./callback.js";
 import { toInlineKeyboard } from "./messenger.js";
 import type { WeatherWorkflow, WorkflowError } from "../workflow.js";
-import type { TelegramUser } from "../types.js";
+import type { TelegramUser, WeatherThreat } from "../types.js";
 
 interface FromLike {
   id?: number;
@@ -30,7 +30,7 @@ export interface BotDeps {
   employeeChatId: number;
   log: Logger;
   /** Trigger a manual weather check (HR-only, for testing). */
-  checkWeatherNow: () => Promise<void>;
+  checkWeatherNow: () => Promise<WeatherThreat | null>;
 }
 
 export function registerHandlers(bot: Bot, deps: BotDeps): void {
@@ -43,26 +43,24 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
 
   bot.command("start", async (ctx) => {
     await ctx.reply(
-      "HR Weather Advisory System bot.\n\nUse /status for the latest weather advisory. HR workflow actions (compose, edit, approve, send) are available in the HR Weather Drafts group.",
+      "HR Weather Advisory System bot.\n\nUse /checkweather for the current forecast. HR workflow actions are available in the HR Weather Drafts group.",
     );
   });
 
-  bot.command("status", async (ctx) => {
-    if (!isHrChat(ctx.chat?.id, hrChatId)) {
-      await ctx.reply("This command is available only in the HR Weather Drafts group.");
-      return;
-    }
-    await ctx.reply(await workflow.latestStatus());
-  });
-
-  bot.command("checkweather", async (ctx) => {
+  bot.command("check-weather", async (ctx) => {
     if (!isHrChat(ctx.chat?.id, hrChatId)) {
       await ctx.reply("This command is available only in the HR Weather Drafts group.");
       return;
     }
     await ctx.reply("🔎 Checking weather…");
     try {
-      await deps.checkWeatherNow();
+      const threat = await deps.checkWeatherNow();
+      if (!threat) {
+        await ctx.reply(
+          "Weather check complete. No advisory is required by the current forecast.",
+        );
+        return;
+      }
       const status = await workflow.latestStatusWithActions();
       await ctx.reply(`✅ Weather check complete.\n\n${status.text}`, {
         reply_markup: status.keyboard ? toInlineKeyboard(status.keyboard) : undefined,
@@ -73,7 +71,7 @@ export function registerHandlers(bot: Bot, deps: BotDeps): void {
     }
   });
 
-  bot.command("createannouncement", async (ctx) => {
+  bot.command("create-announcement", async (ctx) => {
     if (!isHrChat(ctx.chat?.id, hrChatId)) {
       await ctx.reply("This command is available only in the HR Weather Drafts group.");
       return;
@@ -199,9 +197,10 @@ async function handleHrMessage(
   const user = toUser(ctx.from);
   const lower = text.toLowerCase();
 
-  // Status request.
+  // Direct users to the explicit forecast command instead of treating their
+  // message as an edit instruction.
   if (/weather/.test(lower) || /status/.test(lower) || /update/.test(lower)) {
-    await ctx.reply(await workflow.latestStatus());
+    await ctx.reply("Use /checkweather to request the current weather forecast.");
     return;
   }
 

@@ -1,14 +1,15 @@
 import { Bot } from "grammy";
+import path from "node:path";
 import type { AiProvider } from "./ai/prompts.js";
-import { MockAiProvider, DeepSeekProvider } from "./ai/provider.js";
+import { DeepSeekProvider, MockAiProvider } from "./ai/provider.js";
 import { loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { JsonFileStore } from "./store/json-store.js";
 import { registerHandlers } from "./telegram/bot.js";
 import { GrammYMessenger } from "./telegram/messenger.js";
+import type { WeatherThreat } from "./types.js";
 import { createWeatherSource, type WeatherSource } from "./weather/index.js";
 import { WeatherWorkflow } from "./workflow.js";
-import path from "node:path";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -20,15 +21,11 @@ async function main(): Promise<void> {
   const ai: AiProvider =
     config.aiProvider === "mock"
       ? new MockAiProvider()
-      : new DeepSeekProvider(
-          config.deepseekApiKey,
-          config.deepseekModel,
-          config.deepseekBaseUrl,
-        );
+      : new DeepSeekProvider(config.deepseekApiKey, config.deepseekModel, config.deepseekBaseUrl);
 
   if (config.aiProvider === "deepseek" && !config.deepseekApiKey) {
     log.warn(
-      "AI_PROVIDER=deepseek but DEEPSEEK_API_KEY is unset — draft generation will fail. Set the key or use AI_PROVIDER=mock.",
+      "AI_PROVIDER=deepseek but DEEPSEEK_API_KEY is unset — draft generation will fail. Set the key or use AI_PROVIDER=mock."
     );
   }
 
@@ -56,45 +53,40 @@ async function main(): Promise<void> {
       const parts: string[] = [];
       if (chat) {
         parts.push(
-          `chat_id=${chat.id} type=${chat.type} title=${chat.title ?? chat.first_name ?? "?"}`,
+          `chat_id=${chat.id} type=${chat.type} title=${chat.title ?? chat.first_name ?? "?"}`
         );
       }
       if (fwd) {
         const c = fwd.chat ?? fwd.sender_chat;
         if (c) {
-          parts.push(
-            `FORWARDED from chat_id=${c.id} type=${c.type} title=${c.title ?? "?"}`,
-          );
+          parts.push(`FORWARDED from chat_id=${c.id} type=${c.type} title=${c.title ?? "?"}`);
         }
       }
       if (parts.length) log.info(`[debug-update] ${parts.join(" | ")}`);
       await next();
     });
   }
-  const messenger = new GrammYMessenger(
-    bot,
-    config.authorizedHrChatId,
-    config.employeeChatId,
-  );
+  const messenger = new GrammYMessenger(bot, config.authorizedHrChatId, config.employeeChatId);
 
   const workflow = new WeatherWorkflow(
     store,
     ai,
     messenger,
     config.authorizedHrChatId,
-    config.employeeChatId,
+    config.employeeChatId
   );
 
   // Weather check: poll on an interval + manual trigger via /checkweather.
   let checking = false;
-  const checkOnce = async (): Promise<void> => {
-    if (checking) return;
+  const checkOnce = async (): Promise<WeatherThreat | null> => {
+    if (checking) return null;
     checking = true;
     try {
       const threat = await weather.check();
       if (threat) {
         await workflow.onWeatherDetected(threat);
       }
+      return threat;
     } finally {
       checking = false;
     }
@@ -120,9 +112,8 @@ async function main(): Promise<void> {
   try {
     await bot.api.setMyCommands([
       { command: "start", description: "Show bot help" },
-      { command: "status", description: "Show the latest weather advisory" },
-      { command: "checkweather", description: "Check weather now (HR group)" },
-      { command: "createannouncement", description: "Create a manual employee announcement" },
+      { command: "check-weather", description: "Check weather now (HR group)" },
+      { command: "create-announcement", description: "Create a manual employee announcement" },
     ]);
   } catch (err) {
     // The bot remains usable even if Telegram cannot update the command menu.
@@ -142,7 +133,7 @@ async function main(): Promise<void> {
         await bot.start({
           onStart: (me) => {
             log.info(
-              `Bot @${me.username} started. HR chat ${config.authorizedHrChatId}, employee chat ${config.employeeChatId}.`,
+              `Bot @${me.username} started. HR chat ${config.authorizedHrChatId}, employee chat ${config.employeeChatId}.`
             );
           },
         });
