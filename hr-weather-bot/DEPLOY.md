@@ -55,6 +55,48 @@ Node.js 20+ (or Docker), next to or completely separate from OpenClaw.
 8. **Verify** the full flow: weather alert → Compose Draft → Edit → Send to
    Employees → announcement appears in the employee group.
 
+## Production deployment to the office EC2 host through GitHub Actions
+
+The repository includes a workflow that deploys every validated push to the
+`main` branch to the single office EC2 runner labeled `OPSA-STAGING`. Although
+that EC2 host and runner use a staging label, it runs this bot as the live
+production service. It is deliberately separate from the production Auto
+Scaling Group.
+
+### One-time production GitHub setup
+
+1. In the repository, create a GitHub **Environment** named `main`.
+2. Add these **Environment secrets**:
+   - `TELEGRAM_BOT_TOKEN` - the token for the new office bot created with
+     @BotFather. It must have the form `bot-id:secret`.
+   - `DEEPSEEK_API_KEY`
+   - `AUTHORIZED_HR_CHAT_ID`
+   - `EMPLOYEE_CHAT_ID`
+   - `OPENAI_API_KEY` (optional and reserved for future use; the current bot
+     uses DeepSeek only)
+3. Optionally add these Environment variables to override the defaults:
+   `AI_PROVIDER`, `DEEPSEEK_MODEL`, `DEEPSEEK_BASE_URL`, `WEATHER_SOURCE`,
+   `OPEN_METEO_LATITUDE`, `OPEN_METEO_LONGITUDE`,
+   `OPEN_METEO_LOCATION_NAME`, `WEATHER_POLL_INTERVAL_MS`, and `LOG_LEVEL`.
+4. Ensure Docker and the GitHub Actions self-hosted runner are configured to
+   start automatically on the EC2 Windows machine.
+
+### Cutover and single-instance rule
+
+- Stop and remove the old home-machine bot from the live HR and employee
+  groups before enabling the office bot. Two active bots in the same live
+  groups can produce duplicate alerts.
+- Add the new office bot to both live groups as an admin and disable its group
+  privacy through @BotFather.
+- Do not deploy this bot to the production Auto Scaling Group. The bot uses
+  Telegram long polling and local state, so it must run as one instance only.
+
+On deployment, GitHub Actions creates a temporary `.env` from the `main`
+Environment values, runs `deploy.ps1`, verifies the `hr-weather-bot`
+container, and removes the temporary file. Docker receives the variables when
+the container starts. Its `--restart unless-stopped` policy starts it again
+after an EC2 reboot or process failure.
+
 ## Automated setup prompt (paste into your office OpenClaw/assistant)
 
 ```

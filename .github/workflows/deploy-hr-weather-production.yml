@@ -1,0 +1,135 @@
+name: Deploy HR Weather Bot to Production EC2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "hr-weather-bot/**"
+      - ".github/workflows/deploy-hr-weather-production.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hr-weather-bot-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Validate and deploy the single production bot
+    runs-on: [self-hosted, Windows, X64, OPSA-STAGING]
+    environment: main
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hr-weather-bot/package-lock.json
+
+      - name: Install dependencies
+        working-directory: hr-weather-bot
+        shell: powershell
+        run: npm ci
+
+      - name: Validate application
+        working-directory: hr-weather-bot
+        shell: powershell
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Deploy office bot container
+        working-directory: hr-weather-bot
+        shell: powershell
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AUTHORIZED_HR_CHAT_ID: ${{ secrets.AUTHORIZED_HR_CHAT_ID }}
+          EMPLOYEE_CHAT_ID: ${{ secrets.EMPLOYEE_CHAT_ID }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER || 'deepseek' }}
+          DEEPSEEK_MODEL: ${{ vars.DEEPSEEK_MODEL || 'deepseek-chat' }}
+          DEEPSEEK_BASE_URL: ${{ vars.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/chat/completions' }}
+          WEATHER_SOURCE: ${{ vars.WEATHER_SOURCE || 'open-meteo' }}
+          OPEN_METEO_LATITUDE: ${{ vars.OPEN_METEO_LATITUDE || '14.5995' }}
+          OPEN_METEO_LONGITUDE: ${{ vars.OPEN_METEO_LONGITUDE || '120.9842' }}
+          OPEN_METEO_LOCATION_NAME: ${{ vars.OPEN_METEO_LOCATION_NAME || 'Metro Manila' }}
+          WEATHER_POLL_INTERVAL_MS: ${{ vars.WEATHER_POLL_INTERVAL_MS || '600000' }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL || 'info' }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          $required = @{
+            TELEGRAM_BOT_TOKEN = $env:TELEGRAM_BOT_TOKEN
+            DEEPSEEK_API_KEY = $env:DEEPSEEK_API_KEY
+            AUTHORIZED_HR_CHAT_ID = $env:AUTHORIZED_HR_CHAT_ID
+            EMPLOYEE_CHAT_ID = $env:EMPLOYEE_CHAT_ID
+          }
+          $missing = @($required.GetEnumerator() | Where-Object {
+            [string]::IsNullOrWhiteSpace($_.Value)
+          } | ForEach-Object Key)
+          if ($missing.Count -gt 0) {
+            throw "Missing required production Environment secrets: $($missing -join ', ')"
+          }
+          if ($env:TELEGRAM_BOT_TOKEN -notmatch '^\d+:[A-Za-z0-9_-]+$') {
+            throw 'TELEGRAM_BOT_TOKEN must be the complete BotFather token in bot-id:secret format.'
+          }
+          foreach ($chatIdName in @('AUTHORIZED_HR_CHAT_ID', 'EMPLOYEE_CHAT_ID')) {
+            $chatId = [int64][Environment]::GetEnvironmentVariable($chatIdName)
+            if ($chatId -ge 0) {
+              throw "$chatIdName must be a negative Telegram group chat ID."
+            }
+          }
+
+          $envFile = Join-Path $PWD '.env'
+          $envLines = @(
+            "TELEGRAM_BOT_TOKEN=$env:TELEGRAM_BOT_TOKEN"
+            "AUTHORIZED_HR_CHAT_ID=$env:AUTHORIZED_HR_CHAT_ID"
+            "EMPLOYEE_CHAT_ID=$env:EMPLOYEE_CHAT_ID"
+            "AI_PROVIDER=$env:AI_PROVIDER"
+            "DEEPSEEK_API_KEY=$env:DEEPSEEK_API_KEY"
+            "DEEPSEEK_MODEL=$env:DEEPSEEK_MODEL"
+            "DEEPSEEK_BASE_URL=$env:DEEPSEEK_BASE_URL"
+            "OPENAI_API_KEY=$env:OPENAI_API_KEY"
+            "WEATHER_SOURCE=$env:WEATHER_SOURCE"
+            "OPEN_METEO_LATITUDE=$env:OPEN_METEO_LATITUDE"
+            "OPEN_METEO_LONGITUDE=$env:OPEN_METEO_LONGITUDE"
+            "OPEN_METEO_LOCATION_NAME=$env:OPEN_METEO_LOCATION_NAME"
+            "WEATHER_POLL_INTERVAL_MS=$env:WEATHER_POLL_INTERVAL_MS"
+            "DATA_DIR=./data"
+            "LOG_LEVEL=$env:LOG_LEVEL"
+          )
+
+          try {
+            [System.IO.File]::WriteAllLines(
+              $envFile,
+              $envLines,
+              [System.Text.UTF8Encoding]::new($false)
+            )
+            & .\deploy.ps1
+            if ($LASTEXITCODE -ne 0) {
+              throw "Docker deployment failed with exit code $LASTEXITCODE."
+            }
+
+            $running = docker inspect --format '{{.State.Running}}' hr-weather-bot
+            if ($LASTEXITCODE -ne 0 -or $running.Trim() -ne 'true') {
+              throw 'The hr-weather-bot container is not running after deployment.'
+            }
+            docker logs --tail 50 hr-weather-bot
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to read container logs; Docker exited with $LASTEXITCODE."
+            }
+          }
+          finally {
+            if (Test-Path -LiteralPath $envFile) {
+              Remove-Item -LiteralPath $envFile -Force
+            }
+          }
